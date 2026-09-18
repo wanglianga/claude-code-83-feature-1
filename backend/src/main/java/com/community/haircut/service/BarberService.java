@@ -126,13 +126,19 @@ public class BarberService {
         return toolKitRepository.save(kit);
     }
 
-    /** 完成消毒：状态置为已消毒并记录时间（48 小时有效） */
+    /** 完成消毒：状态置为已消毒并记录封签编号、消毒方式、消毒柜编号、责任人（48 小时有效） */
     @Transactional
-    public ToolKit disinfect(Long barberId) {
+    public ToolKit disinfect(Long barberId, String sealNo, String method, String cabinetNo, String responsiblePerson) {
         ToolKit kit = toolKitRepository.findByBarberId(barberId)
                 .orElseThrow(() -> new BizException("请先建立工具包档案"));
         kit.setStatus(DisinfectionStatus.DISINFECTED);
         kit.setDisinfectedAt(LocalDateTime.now());
+        if (sealNo != null) kit.setSealNo(sealNo);
+        if (method != null) kit.setDisinfectionMethod(method);
+        if (cabinetNo != null) kit.setCabinetNo(cabinetNo);
+        if (responsiblePerson != null) kit.setResponsiblePerson(responsiblePerson);
+        kit.setSealIntact(true);
+        kit.setDisinfectionPending(false);
         return toolKitRepository.save(kit);
     }
 }

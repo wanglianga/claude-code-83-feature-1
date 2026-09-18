@@ -78,15 +78,23 @@ public class OrderController {
         return Result.ok(orderService.detail(id));
     }
 
-    public record ToolConfirmRequest(boolean toolsOk, boolean capeOk, boolean disinfectantOk, boolean packOk,
-                                     String missingItems) {
+    public record ToolConfirmRequest(Long kitId, boolean sealIntact, boolean towelDry, boolean toolClean,
+                                     boolean toolsOk, boolean capeOk, boolean disinfectantOk, boolean packOk,
+                                     String missingItems, String infectionRisk, String infectionNote,
+                                     boolean separatelyPacked, boolean disposableUsed, String postHandling) {
     }
 
     @PostMapping("/{id}/confirm-tools")
     public Result<ToolConfirmation> confirmTools(@PathVariable Long id, @RequestBody ToolConfirmRequest request) {
         SecurityUtils.requireRole(Role.BARBER, Role.STAFF, Role.ADMIN);
-        return Result.ok(orderService.confirmTools(id, request.toolsOk(), request.capeOk(),
-                request.disinfectantOk(), request.packOk(), request.missingItems(), op()));
+        com.community.haircut.enums.InfectionRiskType risk = request.infectionRisk() == null
+                ? com.community.haircut.enums.InfectionRiskType.NONE
+                : com.community.haircut.enums.InfectionRiskType.valueOf(request.infectionRisk());
+        return Result.ok(orderService.confirmTools(id, request.kitId(), request.sealIntact(),
+                request.towelDry(), request.toolClean(), request.toolsOk(), request.capeOk(),
+                request.disinfectantOk(), request.packOk(), request.missingItems(), risk,
+                request.infectionNote(), request.separatelyPacked(), request.disposableUsed(),
+                request.postHandling(), op()));
     }
 
     public record CheckInRequest(boolean entrySafe, String elderState, String mentalState,
@@ -116,22 +124,23 @@ public class OrderController {
         return Result.ok(orderService.complete(id, request.haircutPhotos(), request.paymentNote(), op()));
     }
 
-    public record CancelRequest(String reason) {
+    public record CancelRequest(String reason, boolean toolIssueCaused) {
     }
 
     @PostMapping("/{id}/cancel")
     public Result<Void> cancel(@PathVariable Long id, @RequestBody CancelRequest request) {
-        orderService.cancel(id, request.reason(), op());
+        orderService.cancel(id, request.reason(), request.toolIssueCaused(), op());
         return Result.ok();
     }
 
     public record RescheduleRequest(@NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate newDate,
-                                    @NotNull String newTimeSlot, String reason) {
+                                    @NotNull String newTimeSlot, String reason, boolean toolIssueCaused) {
     }
 
     @PostMapping("/{id}/reschedule")
     public Result<Void> reschedule(@PathVariable Long id, @RequestBody RescheduleRequest request) {
-        orderService.reschedule(id, request.newDate(), request.newTimeSlot(), request.reason(), op());
+        orderService.reschedule(id, request.newDate(), request.newTimeSlot(), request.reason(),
+                request.toolIssueCaused(), op());
         return Result.ok();
     }
 

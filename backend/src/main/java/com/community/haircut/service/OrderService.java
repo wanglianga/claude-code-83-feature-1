@@ -37,6 +37,7 @@ public class OrderService {
     private final SubsidyRecordRepository subsidyRecordRepository;
     private final FollowUpRepository followUpRepository;
     private final UserRepository userRepository;
+    private final ToolIssueRecordRepository toolIssueRepository;
     private final NotificationService notificationService;
 
     private final AtomicInteger orderSeq = new AtomicInteger(0);
@@ -51,6 +52,7 @@ public class OrderService {
                         ServiceRecordRepository serviceRecordRepository,
                         SubsidyRecordRepository subsidyRecordRepository,
                         FollowUpRepository followUpRepository, UserRepository userRepository,
+                        ToolIssueRecordRepository toolIssueRepository,
                         NotificationService notificationService) {
         this.orderRepository = orderRepository;
         this.elderRepository = elderRepository;
@@ -65,6 +67,7 @@ public class OrderService {
         this.subsidyRecordRepository = subsidyRecordRepository;
         this.followUpRepository = followUpRepository;
         this.userRepository = userRepository;
+        this.toolIssueRepository = toolIssueRepository;
         this.notificationService = notificationService;
     }
 
@@ -168,24 +171,29 @@ public class OrderService {
             if (load >= s.getMaxOrders()) {
                 continue;
             }
-            // 工具消毒状态必须有效
+            // 工具消毒状态必须有效（备用包未补录消毒记录前也不得再用）
             ToolKit kit = toolKitRepository.findByBarberId(s.getBarberId()).orElse(null);
-            if (kit == null || effectiveDisinfectionStatus(kit) != DisinfectionStatus.DISINFECTED) {
+            if (kit == null || effectiveDisinfectionStatus(kit) != DisinfectionStatus.DISINFECTED
+                    || Boolean.TRUE.equals(kit.getDisinfectionPending())) {
                 continue;
             }
             // 评分：楼栋距离 + 当前负载；常驻楼栋优先
             BarberProfile profile = barberProfileRepository.findByUserId(s.getBarberId()).orElse(null);
-            if (profile != null && !profile.getActive()) {
+            // 暂停上门资格或停用的理发师不参与派单
+            if (profile == null || !profile.getActive() || Boolean.TRUE.equals(profile.getVisitSuspended())) {
                 continue;
             }
+            double weight = profile.getDispatchWeight() == null ? 1.0 : Math.max(0.0, profile.getDispatchWeight());
             double score = load * 2.0;
             int distance = elder.getBuildingDistance() == null ? 0 : elder.getBuildingDistance();
             score += distance / 500.0;
-            if (profile != null && profile.getServiceBuildings() != null
+            if (profile.getServiceBuildings() != null
                     && elder.getBuilding() != null
                     && Arrays.asList(profile.getServiceBuildings().split(",")).contains(elder.getBuilding())) {
                 score -= 5;
             }
+            // 派单权重下调后排序成本升高，被选中概率下降
+            score /= Math.max(0.01, weight);
             if (score < bestScore) {
                 bestScore = score;
                 best = s;
@@ -285,42 +293,133 @@ public class OrderService {
         map.put("serviceRecord", serviceRecordRepository.findByOrderId(id).orElse(null));
         map.put("subsidies", subsidyRecordRepository.findByOrderId(id));
         map.put("followUps", followUpRepository.findByOrderId(id));
+        map.put("toolIssues", toolIssueRepository.findByOrderId(id));
         return map;
     }
 
     // ---------------- 流程动作 ----------------
 
-    /** 理发师上门前确认：工具、围布、消毒用品、服务包 */
+    /**
+     * 理发师上门前扫码核验：封签、消毒日期/方式/柜号/责任人 + 外观检查 + 感染风险。
+     * 任一硬性项不通过则 passed=false，服务单不流转，前端引导「联系社区改约 / 启用备用服务包」。
+     */
     @Transactional
-    public ToolConfirmation confirmTools(Long orderId, boolean toolsOk, boolean capeOk, boolean disinfectantOk,
-                                         boolean packOk, String missingItems, LoginUserInfo operator) {
+    public ToolConfirmation confirmTools(Long orderId, Long kitId, boolean sealIntact, boolean towelDry,
+                                         boolean toolClean, boolean toolsOk, boolean capeOk,
+                                         boolean disinfectantOk, boolean packOk, String missingItems,
+                                         InfectionRiskType infectionRisk, String infectionNote,
+                                         boolean separatelyPacked, boolean disposableUsed,
+                                         String postHandling, LoginUserInfo operator) {
         ServiceOrder order = get(orderId);
         checkBarber(order, operator);
         if (order.getStatus() != OrderStatus.ASSIGNED) {
-            throw new BizException("当前状态不可确认工具（需为待上门状态）");
+            throw new BizException("当前状态不可核验工具（需为待上门状态）");
         }
-        ToolConfirmation tc = new ToolConfirmation();
+        ToolKit kit = null;
+        if (kitId != null) {
+            kit = toolKitRepository.findById(kitId)
+                    .orElseThrow(() -> new BizException("扫码的服务包不存在"));
+        } else {
+            kit = toolKitRepository.findByBarberId(operator.userId()).orElse(null);
+        }
+        if (kit == null) {
+            throw new BizException("未找到服务包档案，请联系社区");
+        }
+        if (Boolean.TRUE.equals(kit.getDisinfectionPending()) && kit.getKitType() == KitType.BACKUP) {
+            throw new BizException("该备用服务包消毒记录尚未补录，不得使用");
+        }
+        boolean disinfectionValid = effectiveDisinfectionStatus(kit) == DisinfectionStatus.DISINFECTED;
+        infectionRisk = infectionRisk == null ? InfectionRiskType.NONE : infectionRisk;
+        boolean riskHandled = infectionRisk == InfectionRiskType.NONE
+                || (separatelyPacked && postHandling != null && !postHandling.isBlank());
+
+        boolean passed = disinfectionValid && sealIntact && towelDry && toolClean
+                && toolsOk && capeOk && disinfectantOk && packOk && riskHandled;
+
+        ToolConfirmation existing = toolConfirmationRepository.findByOrderId(orderId).orElse(null);
+        ToolConfirmation tc = existing == null ? new ToolConfirmation() : existing;
         tc.setOrderId(orderId);
         tc.setBarberId(operator.userId());
+        tc.setKitId(kit.getId());
+        tc.setBackupKitUsed(kit.getKitType() == KitType.BACKUP);
+        tc.setSealNo(kit.getSealNo());
+        tc.setSealIntact(sealIntact);
+        tc.setDisinfectedAt(kit.getDisinfectedAt());
+        tc.setDisinfectionMethod(kit.getDisinfectionMethod());
+        tc.setCabinetNo(kit.getCabinetNo());
+        tc.setResponsiblePerson(kit.getResponsiblePerson());
+        tc.setDisinfectionValid(disinfectionValid);
         tc.setToolsOk(toolsOk);
         tc.setCapeOk(capeOk);
         tc.setDisinfectantOk(disinfectantOk);
         tc.setPackOk(packOk);
+        tc.setTowelDry(towelDry);
+        tc.setToolClean(toolClean);
         tc.setMissingItems(missingItems);
+        tc.setInfectionRisk(infectionRisk);
+        tc.setInfectionNote(infectionNote);
+        tc.setSeparatelyPacked(separatelyPacked);
+        tc.setDisposableUsed(disposableUsed);
+        tc.setPostHandling(postHandling);
+        tc.setPostHandlingRecorded(riskHandled && infectionRisk != InfectionRiskType.NONE);
+        tc.setPassed(passed);
+        tc.setConfirmedAt(LocalDateTime.now());
         toolConfirmationRepository.save(tc);
 
-        boolean allOk = toolsOk && capeOk && disinfectantOk && packOk;
-        if (allOk) {
+        if (passed) {
             order.setStatus(OrderStatus.TOOL_CONFIRMED);
+            order.setUsedKitId(kit.getId());
+            order.setUsedSealNo(kit.getSealNo());
+            order.setBackupKitUsed(kit.getKitType() == KitType.BACKUP);
+            if (infectionRisk != InfectionRiskType.NONE) {
+                order.setInfectionRisk(true);
+                order.setInfectionNote(riskLabel(infectionRisk) + (infectionNote == null ? "" : "：" + infectionNote));
+            }
             order.setUpdatedAt(LocalDateTime.now());
             orderRepository.save(order);
             addEvent(orderId, "TOOL_CONFIRM", operator.userId(), operator.realName(), operator.role(),
-                    "上门前确认完成：理发工具、围布、消毒用品、服务包均已备齐");
+                    "扫码核验通过：封签 " + kit.getSealNo() + "，" + kit.getDisinfectionMethod()
+                            + "，消毒柜 " + kit.getCabinetNo() + "，责任人 " + kit.getResponsiblePerson()
+                            + (kit.getKitType() == KitType.BACKUP ? "（使用备用服务包）" : "")
+                            + (infectionRisk != InfectionRiskType.NONE
+                            ? "；服务单标记感染风险【" + riskLabel(infectionRisk) + "】，工具单独分装并记录用后处理" : ""));
         } else {
             addEvent(orderId, "TOOL_CONFIRM", operator.userId(), operator.realName(), operator.role(),
-                    "工具确认存在遗漏：" + (missingItems == null ? "未说明" : missingItems));
+                    "扫码核验未通过，禁止开始服务：" + String.join("、", verifyIssues(kit, sealIntact, towelDry,
+                            toolClean, toolsOk, capeOk, disinfectantOk, packOk, riskHandled)));
+            notificationService.notifyRole(Role.STAFF, "工具核验未通过 " + order.getOrderNo(),
+                    "理发师「" + operator.realName() + "」上门核验未通过，等待改约或启用备用服务包", "EXCEPTION");
         }
         return tc;
+    }
+
+    /** 计算核验不通过的具体原因（供前端/事件展示） */
+    public List<String> verifyIssues(ToolKit kit, boolean sealIntact, boolean towelDry, boolean toolClean,
+                                     boolean toolsOk, boolean capeOk, boolean disinfectantOk, boolean packOk,
+                                     boolean riskHandled) {
+        List<String> issues = new ArrayList<>();
+        if (effectiveDisinfectionStatus(kit) != DisinfectionStatus.DISINFECTED) {
+            issues.add("消毒超过有效期（" + DISINFECTION_VALID_HOURS + " 小时）");
+        }
+        if (!sealIntact) issues.add("服务包封签破损");
+        if (!towelDry) issues.add("毛巾围布受潮");
+        if (!toolClean) issues.add("剪刀剃刀有污渍");
+        if (!toolsOk) issues.add("理发工具遗漏");
+        if (!capeOk) issues.add("围布遗漏");
+        if (!disinfectantOk) issues.add("消毒用品遗漏");
+        if (!packOk) issues.add("服务包遗漏");
+        if (!riskHandled) issues.add("感染风险工具未单独分装或未记录用后处理");
+        return issues;
+    }
+
+    public String riskLabel(InfectionRiskType risk) {
+        return switch (risk) {
+            case TINEA -> "头癣";
+            case SKIN_DISEASE -> "皮肤病";
+            case OPEN_WOUND -> "开放性伤口";
+            case DISPOSABLE_REQ -> "老人要求一次性用品";
+            default -> "无";
+        };
     }
 
     /** 志愿者陪同进门：核对老人状态、现场照片、家属授权 */
@@ -333,6 +432,10 @@ public class OrderService {
         }
         if (order.getStatus() != OrderStatus.TOOL_CONFIRMED && order.getStatus() != OrderStatus.ASSIGNED) {
             throw new BizException("当前状态不可进行进门核对");
+        }
+        if (order.getStatus() == OrderStatus.ASSIGNED
+                || toolConfirmationRepository.findByOrderId(orderId).map(tc -> !Boolean.TRUE.equals(tc.getPassed())).orElse(true)) {
+            throw new BizException("理发师尚未通过上门扫码核验，不能进门服务");
         }
         if (Boolean.TRUE.equals(order.getNeedFamilyPresent()) && !familyAuthorized) {
             throw new BizException("该老人要求家属在场，必须确认家属授权后才能开始服务");
@@ -362,6 +465,11 @@ public class OrderService {
     public void startService(Long orderId, LoginUserInfo operator) {
         ServiceOrder order = get(orderId);
         checkBarber(order, operator);
+        boolean passed = toolConfirmationRepository.findByOrderId(orderId)
+                .map(tc -> Boolean.TRUE.equals(tc.getPassed())).orElse(false);
+        if (!passed) {
+            throw new BizException("上门扫码核验未通过，不允许开始服务；请联系社区改约或启用备用服务包");
+        }
         if (order.getStatus() != OrderStatus.ON_SITE
                 && !(order.getStatus() == OrderStatus.TOOL_CONFIRMED && order.getVolunteerId() == null)) {
             throw new BizException("当前状态不可开始服务（需志愿者完成进门核对）");
@@ -423,7 +531,7 @@ public class OrderService {
                     "老人「" + order.getElderName() + "」补贴 ¥" + order.getSubsidyAmount() + " 待审核", "FINANCE");
         }
 
-        // 独居老人服务后回访；有异常的服务单生成异常回访
+        // 独居老人服务后回访；有异常的服务单生成异常回访；感染风险单跟踪皮肤情况
         Elder elder = elderRepository.findById(order.getElderId()).orElse(null);
         if (Boolean.TRUE.equals(order.getLivingAlone())) {
             createFollowUp(order, FollowUpType.SERVICE,
@@ -431,6 +539,27 @@ public class OrderService {
         }
         if (Boolean.TRUE.equals(order.getHasException())) {
             createFollowUp(order, FollowUpType.EXCEPTION, "服务单存在异常，需回访确认老人状况与处理结果");
+        }
+        if (Boolean.TRUE.equals(order.getInfectionRisk())) {
+            createFollowUp(order, FollowUpType.EXCEPTION,
+                    "感染风险服务回访：服务后 3-7 天确认老人是否出现皮肤瘙痒、红疹等不适；工具用后处理="
+                            + toolConfirmationRepository.findByOrderId(orderId)
+                            .map(ToolConfirmation::getPostHandling).orElse("未记录"));
+        }
+
+        // 备用服务包使用后待补录消毒记录，未补录前不得再次派单
+        if (order.getUsedKitId() != null) {
+            toolKitRepository.findById(order.getUsedKitId()).ifPresent(kit -> {
+                if (kit.getKitType() == KitType.BACKUP) {
+                    kit.setDisinfectionPending(true);
+                    kit.setStatus(DisinfectionStatus.PENDING);
+                    toolKitRepository.save(kit);
+                    addEvent(orderId, "TOOL_CONFIRM", operator.userId(), operator.realName(), operator.role(),
+                            "备用服务包「" + kit.getName() + "」已使用，需补录消毒记录后方可再次派单");
+                    notificationService.notifyRole(Role.STAFF, "备用服务包待补录消毒",
+                            "备用服务包「" + kit.getName() + "」已用于服务单 " + order.getOrderNo() + "，请尽快补录消毒记录", "ORDER");
+                }
+            });
         }
 
         addEvent(orderId, "COMPLETE", operator.userId(), operator.realName(), operator.role(),
@@ -456,32 +585,36 @@ public class OrderService {
                 "老人「" + order.getElderName() + "」：" + content, "CARE");
     }
 
-    /** 取消预约 */
+    /** 取消预约；toolIssueCaused=true 表示因工具问题取消/改期，不算老人违约、不扣补贴、不计理发师违约 */
     @Transactional
-    public void cancel(Long orderId, String reason, LoginUserInfo operator) {
+    public void cancel(Long orderId, String reason, boolean toolIssueCaused, LoginUserInfo operator) {
         ServiceOrder order = get(orderId);
         if (order.getStatus() == OrderStatus.COMPLETED || order.getStatus() == OrderStatus.CANCELLED) {
             throw new BizException("服务单已完结，不可取消");
         }
         order.setStatus(OrderStatus.CANCELLED);
         order.setCancelReason(reason);
+        order.setToolIssueCaused(toolIssueCaused);
         order.setUpdatedAt(LocalDateTime.now());
         orderRepository.save(order);
-        if (operator.role() == Role.BARBER) {
+        if (operator.role() == Role.BARBER && !toolIssueCaused) {
             barberProfileRepository.findByUserId(operator.userId()).ifPresent(p -> {
                 p.setCancelCount(p.getCancelCount() + 1);
                 p.setCreditScore(Math.max(0, p.getCreditScore() - 3));
                 barberProfileRepository.save(p);
             });
         }
-        addEvent(orderId, "CANCEL", operator.userId(), operator.realName(), operator.role(), "取消服务单，原因：" + reason);
+        addEvent(orderId, "CANCEL", operator.userId(), operator.realName(), operator.role(),
+                "取消服务单，原因：" + reason + (toolIssueCaused ? "（因工具消毒/封签等问题取消，不算老人违约，不扣补贴）" : ""));
         notificationService.notifyRole(Role.STAFF, "服务单取消 " + order.getOrderNo(),
-                "老人「" + order.getElderName() + "」的预约被取消：" + reason, "ORDER");
+                "老人「" + order.getElderName() + "」的预约被取消：" + reason
+                        + (toolIssueCaused ? "（工具问题，非老人违约）" : ""), "ORDER");
     }
 
-    /** 改约（家属改约等）：调整日期与时段，重新校验理发师可用性 */
+    /** 改约（家属改约等）：调整日期与时段，重新校验理发师可用性；工具问题改期不算老人违约 */
     @Transactional
-    public void reschedule(Long orderId, LocalDate newDate, String newTimeSlot, String reason, LoginUserInfo operator) {
+    public void reschedule(Long orderId, LocalDate newDate, String newTimeSlot, String reason,
+                           boolean toolIssueCaused, LoginUserInfo operator) {
         ServiceOrder order = get(orderId);
         if (order.getStatus() == OrderStatus.COMPLETED || order.getStatus() == OrderStatus.CANCELLED) {
             throw new BizException("服务单已完结，不可改约");
@@ -490,7 +623,7 @@ public class OrderService {
             throw new BizException("改约日期不能早于今天");
         }
         Elder elder = elderRepository.findById(order.getElderId()).orElseThrow(() -> new BizException("老人档案不存在"));
-        // 校验原理发师新时段可用性，不可用则重新智能匹配
+        // 重新智能匹配可用理发师（工具问题改期时原包不可用，交由派单重新选择）
         BarberSchedule chosen = chooseBarber(elder, newDate, newTimeSlot, null);
         User barber = userRepository.findById(chosen.getBarberId()).orElseThrow();
         order.setScheduledDate(newDate);
@@ -498,12 +631,17 @@ public class OrderService {
         order.setBarberId(barber.getId());
         order.setBarberName(barber.getRealName());
         order.setRescheduleCount(order.getRescheduleCount() + 1);
+        order.setToolIssueCaused(toolIssueCaused || Boolean.TRUE.equals(order.getToolIssueCaused()));
+        // 改期后需重新扫码核验
+        order.setStatus(OrderStatus.ASSIGNED);
         order.setUpdatedAt(LocalDateTime.now());
         orderRepository.save(order);
         addEvent(orderId, "RESCHEDULE", operator.userId(), operator.realName(), operator.role(),
-                "改约至 " + newDate + " " + newTimeSlot + "，原因：" + reason + "；理发师调整为「" + barber.getRealName() + "」");
+                "改约至 " + newDate + " " + newTimeSlot + "，原因：" + reason
+                        + (toolIssueCaused ? "（因工具问题改期，不算老人违约，不扣补贴）" : "")
+                        + "；理发师调整为「" + barber.getRealName() + "」，上门前需重新扫码核验");
         notificationService.notify(barber.getId(), "服务单改约 " + order.getOrderNo(),
-                newDate + " " + newTimeSlot + " 上门为「" + order.getElderName() + "」理发", "ORDER");
+                newDate + " " + newTimeSlot + " 上门为「" + order.getElderName() + "」理发，上门前请重新扫码核验", "ORDER");
     }
 
     /** 满意度评价（家属/社区） */

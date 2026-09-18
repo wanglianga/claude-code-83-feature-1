@@ -21,6 +21,33 @@
       </el-col>
     </el-row>
 
+    <el-row :gutter="16" style="margin-top: 16px">
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat">
+          <div class="num" style="color: #409eff">¥{{ funds.emptyRunCompTotal ?? 0 }}</div>
+          <div class="label">工具问题空跑社区补偿</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat">
+          <div class="num" style="color: #e6a23c">{{ funds.compPendingCount ?? 0 }}</div>
+          <div class="label">待认定空跑补偿</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat">
+          <div class="num" style="color: #f56c6c">{{ funds.infectionConfirmedCount ?? 0 }}</div>
+          <div class="label">确认交叉感染/消毒责任（共 {{ funds.infectionTotal ?? 0 }} 起，待处置 {{ funds.infectionOpenCount ?? 0 }}）</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="hover" class="stat">
+          <div class="num" style="color: #f56c6c">{{ funds.suspendedBarberCount ?? 0 }}</div>
+          <div class="label">暂停上门资格理发师</div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <el-card shadow="never" style="margin-top: 16px">
       <div class="toolbar">
         <el-radio-group v-model="statusFilter" @change="loadList">

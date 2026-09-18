@@ -96,6 +96,29 @@ public class ServiceOrder {
     @Column(nullable = false)
     private Boolean hasException = false;
 
+    /** 是否标记感染风险（头癣/皮肤病/开放性伤口/一次性用品要求） */
+    @Column(nullable = false)
+    private Boolean infectionRisk = false;
+
+    /** 感染风险说明 */
+    @Column(length = 500)
+    private String infectionNote;
+
+    /** 本次服务实际使用的工具包 id（交叉感染反查依据） */
+    private Long usedKitId;
+
+    /** 使用的封签编号（反查依据） */
+    @Column(length = 40)
+    private String usedSealNo;
+
+    /** 是否使用备用服务包 */
+    @Column(nullable = false)
+    private Boolean backupKitUsed = false;
+
+    /** 是否因工具问题取消/改期（不算老人违约，不扣补贴） */
+    @Column(nullable = false)
+    private Boolean toolIssueCaused = false;
+
     private String cancelReason;
 
     @Column(nullable = false)

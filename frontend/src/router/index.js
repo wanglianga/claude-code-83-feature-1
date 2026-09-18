@@ -16,6 +16,7 @@ const routes = [
       { path: 'volunteer', component: () => import('../views/VolunteerWorkbench.vue'), meta: { title: '志愿者工作台', roles: ['VOLUNTEER'] } },
       { path: 'family', component: () => import('../views/FamilyHome.vue'), meta: { title: '家属服务', roles: ['FAMILY'] } },
       { path: 'exceptions', component: () => import('../views/Exceptions.vue'), meta: { title: '异常处理中心' } },
+      { path: 'tool-safety', component: () => import('../views/ToolSafety.vue'), meta: { title: '工具消毒与感染追溯', roles: ['ADMIN', 'STAFF', 'FINANCE', 'BARBER', 'VOLUNTEER'] } },
       { path: 'finance', component: () => import('../views/Finance.vue'), meta: { title: '补贴财务', roles: ['FINANCE', 'ADMIN', 'STAFF'] } },
       { path: 'follow-ups', component: () => import('../views/FollowUps.vue'), meta: { title: '回访管理', roles: ['ADMIN', 'STAFF', 'GRID', 'VOLUNTEER'] } },
       { path: 'care-tasks', component: () => import('../views/CareTasks.vue'), meta: { title: '关怀任务', roles: ['ADMIN', 'STAFF', 'GRID'] } },

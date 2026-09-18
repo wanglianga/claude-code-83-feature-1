@@ -63,6 +63,7 @@ const ALL_MENUS = [
   { path: '/volunteer', title: '志愿者工作台', icon: 'HelpFilled', roles: ['VOLUNTEER'] },
   { path: '/family', title: '家属服务', icon: 'HomeFilled', roles: ['FAMILY'] },
   { path: '/exceptions', title: '异常处理', icon: 'WarningFilled', roles: ['ADMIN', 'STAFF', 'FINANCE', 'BARBER', 'VOLUNTEER'] },
+  { path: '/tool-safety', title: '工具消毒追溯', icon: 'MagicStick', roles: ['ADMIN', 'STAFF', 'FINANCE', 'BARBER', 'VOLUNTEER'] },
   { path: '/finance', title: '补贴财务', icon: 'Money', roles: ['FINANCE', 'ADMIN', 'STAFF'] },
   { path: '/follow-ups', title: '回访管理', icon: 'PhoneFilled', roles: ['ADMIN', 'STAFF', 'GRID', 'VOLUNTEER'] },
   { path: '/care-tasks', title: '关怀任务', icon: 'FirstAidKit', roles: ['ADMIN', 'STAFF', 'GRID'] },

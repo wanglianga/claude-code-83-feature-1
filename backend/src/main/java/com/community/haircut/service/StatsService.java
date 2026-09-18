@@ -26,12 +26,16 @@ public class StatsService {
     private final ExceptionRecordRepository exceptionRepository;
     private final CareTaskRepository careTaskRepository;
     private final FollowUpRepository followUpRepository;
+    private final ToolIssueRecordRepository toolIssueRepository;
+    private final InfectionTraceRepository infectionTraceRepository;
 
     public StatsService(ElderRepository elderRepository, ServiceOrderRepository orderRepository,
                         BarberProfileRepository barberProfileRepository,
                         VolunteerProfileRepository volunteerProfileRepository, UserRepository userRepository,
                         SubsidyRecordRepository subsidyRepository, ExceptionRecordRepository exceptionRepository,
-                        CareTaskRepository careTaskRepository, FollowUpRepository followUpRepository) {
+                        CareTaskRepository careTaskRepository, FollowUpRepository followUpRepository,
+                        ToolIssueRecordRepository toolIssueRepository,
+                        InfectionTraceRepository infectionTraceRepository) {
         this.elderRepository = elderRepository;
         this.orderRepository = orderRepository;
         this.barberProfileRepository = barberProfileRepository;
@@ -41,6 +45,8 @@ public class StatsService {
         this.exceptionRepository = exceptionRepository;
         this.careTaskRepository = careTaskRepository;
         this.followUpRepository = followUpRepository;
+        this.toolIssueRepository = toolIssueRepository;
+        this.infectionTraceRepository = infectionTraceRepository;
     }
 
     public Map<String, Object> dashboard() {
@@ -164,6 +170,30 @@ public class StatsService {
                 .map(SubsidyRecord::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add));
         map.put("pendingCount", records.stream().filter(r -> r.getStatus() == SubsidyStatus.PENDING).count());
         map.put("approvedCount", records.stream().filter(r -> r.getStatus() == SubsidyStatus.APPROVED).count());
+
+        // 工具问题空跑补偿（公益资金复盘）
+        List<ToolIssueRecord> issues = toolIssueRepository.findAllByOrderByHandledAtDesc();
+        BigDecimal compTotal = issues.stream()
+                .filter(i -> i.getCompensationStatus() == com.community.haircut.enums.CompensationStatus.COMMUNITY
+                        || i.getCompensationStatus() == com.community.haircut.enums.CompensationStatus.PAID)
+                .map(ToolIssueRecord::getCompensationAmount)
+                .filter(java.util.Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        map.put("emptyRunCompTotal", compTotal);
+        map.put("compPendingCount", issues.stream()
+                .filter(i -> i.getCompensationStatus() == com.community.haircut.enums.CompensationStatus.PENDING).count());
+        map.put("barberBearCount", issues.stream()
+                .filter(i -> i.getCompensationStatus() == com.community.haircut.enums.CompensationStatus.BARBER_BEAR).count());
+
+        // 交叉感染/消毒责任复盘
+        List<InfectionTrace> traces = infectionTraceRepository.findAllByOrderByCreatedAtDesc();
+        map.put("infectionTotal", traces.size());
+        map.put("infectionOpenCount", traces.stream()
+                .filter(t -> t.getStatus() != com.community.haircut.enums.InfectionStatus.RESOLVED).count());
+        map.put("infectionConfirmedCount", traces.stream()
+                .filter(InfectionTrace::getCrossInfectionConfirmed).count());
+        map.put("suspendedBarberCount", barberProfileRepository.findAll().stream()
+                .filter(p -> Boolean.TRUE.equals(p.getVisitSuspended())).count());
         return map;
     }
 
@@ -192,8 +222,10 @@ public class StatsService {
             }
             int cancels = 0;
             for (ServiceOrder o : mine) {
-                if (o.getStatus() == OrderStatus.CANCELLED) {
+                if (o.getStatus() == OrderStatus.CANCELLED && !Boolean.TRUE.equals(o.getToolIssueCaused())) {
                     cancels++;
+                } else if (o.getStatus() == OrderStatus.CANCELLED) {
+                    continue;
                 } else {
                     break;
                 }

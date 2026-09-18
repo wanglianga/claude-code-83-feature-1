@@ -69,11 +69,13 @@ public class CareTaskService {
                 created++;
             }
 
-            // 2. 连续取消
+            // 2. 连续取消（因工具消毒/封签问题取消不算老人违约，不计入连续取消）
             int cancels = 0;
             for (ServiceOrder o : orders) {
-                if (o.getStatus() == OrderStatus.CANCELLED) {
+                if (o.getStatus() == OrderStatus.CANCELLED && !Boolean.TRUE.equals(o.getToolIssueCaused())) {
                     cancels++;
+                } else if (o.getStatus() == OrderStatus.CANCELLED) {
+                    continue;
                 } else {
                     break;
                 }

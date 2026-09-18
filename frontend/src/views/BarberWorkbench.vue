@@ -62,9 +62,20 @@
           <template v-if="toolkit">
             <p><b>{{ toolkit.name }}</b></p>
             <p class="muted">清单：{{ toolkit.items }}</p>
-            <p class="muted">上次消毒：{{ toolkit.disinfectedAt || '从未消毒' }}</p>
-            <p class="muted">消毒 48 小时内有效，过期将无法被派单</p>
-            <el-button type="primary" size="small" style="margin-top: 8px" @click="doDisinfect">完成消毒</el-button>
+            <el-descriptions :column="1" size="small" border style="margin: 6px 0">
+              <el-descriptions-item label="封签编号">
+                {{ toolkit.sealNo || '未登记' }}
+                <el-tag size="small" :type="toolkit.sealIntact ? 'success' : 'danger'" style="margin-left: 4px">
+                  {{ toolkit.sealIntact ? '完好' : '破损' }}
+                </el-tag>
+              </el-descriptions-item>
+              <el-descriptions-item label="消毒时间">{{ toolkit.disinfectedAt || '从未消毒' }}</el-descriptions-item>
+              <el-descriptions-item label="消毒方式">{{ toolkit.disinfectionMethod || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="消毒柜">{{ toolkit.cabinetNo || '—' }}</el-descriptions-item>
+              <el-descriptions-item label="责任人">{{ toolkit.responsiblePerson || '—' }}</el-descriptions-item>
+            </el-descriptions>
+            <p class="muted">消毒 48 小时内有效，过期/封签破损将无法派单且上门核验不通过</p>
+            <el-button type="primary" size="small" style="margin-top: 8px" @click="disinfectDialog = true">完成消毒并封签</el-button>
           </template>
           <el-empty v-else description="暂无工具包" :image-size="40" />
         </el-card>
@@ -82,6 +93,27 @@
         </el-card>
       </el-col>
     </el-row>
+
+    <el-dialog v-model="disinfectDialog" title="完成消毒并封签" width="460px">
+      <el-alert type="info" :closable="false" style="margin-bottom: 10px"
+        title="登记新封签编号、消毒方式、消毒柜编号与责任人，生成 48 小时有效消毒记录。" />
+      <el-form label-width="100px">
+        <el-form-item label="封签编号"><el-input v-model="disinfectForm.sealNo" placeholder="如 FB-20260918-009" /></el-form-item>
+        <el-form-item label="消毒方式">
+          <el-select v-model="disinfectForm.method" style="width: 100%" allow-create filterable>
+            <el-option label="紫外线消毒柜（30分钟）" value="紫外线消毒柜（30分钟）" />
+            <el-option label="高温蒸煮（15分钟）" value="高温蒸煮（15分钟）" />
+            <el-option label="含氯消毒剂浸泡（30分钟）" value="含氯消毒剂浸泡（30分钟）" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="消毒柜编号"><el-input v-model="disinfectForm.cabinetNo" placeholder="如 UV-A01" /></el-form-item>
+        <el-form-item label="责任人"><el-input v-model="disinfectForm.responsiblePerson" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="disinfectDialog = false">取消</el-button>
+        <el-button type="primary" @click="doDisinfect">确认消毒封签</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="scheduleDialog" title="添加排班" width="420px">
       <el-form label-width="90px">
@@ -123,6 +155,8 @@ const toolkit = ref(null)
 const profile = ref(null)
 const loading = ref(false)
 const scheduleDialog = ref(false)
+const disinfectDialog = ref(false)
+const disinfectForm = reactive({ sealNo: '', method: '紫外线消毒柜（30分钟）', cabinetNo: '', responsiblePerson: '李理发' })
 const scheduleForm = reactive({
   workDate: dayjs().add(1, 'day').format('YYYY-MM-DD'),
   startTime: '08:00',
@@ -174,8 +208,9 @@ const delSchedule = async (id) => {
 }
 
 const doDisinfect = async () => {
-  await disinfectToolKit(uid)
-  ElMessage.success('消毒完成，48 小时内可被派单')
+  await disinfectToolKit(uid, { ...disinfectForm })
+  ElMessage.success('消毒封签完成，48 小时内可被派单')
+  disinfectDialog.value = false
   load()
 }
 

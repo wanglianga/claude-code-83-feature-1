@@ -37,6 +37,30 @@ public class BarberProfile {
     @Column(nullable = false)
     private Integer incidentCount = 0;
 
+    /** 交叉感染/消毒责任投诉次数 */
+    @Column(nullable = false)
+    private Integer infectionCount = 0;
+
+    /** 派单权重，默认 1.0；确认消毒责任后下调（如 0.5），暂停上门资格时为 0 */
+    @Column(nullable = false)
+    private Double dispatchWeight = 1.0;
+
+    /** 是否暂停上门资格（确认交叉感染或消毒责任） */
+    @Column(nullable = false)
+    private Boolean visitSuspended = false;
+
+    /** 暂停原因 */
+    @Column(length = 500)
+    private String suspendReason;
+
+    /** 消毒培训是否完成（暂停后复岗条件之一） */
+    @Column(nullable = false)
+    private Boolean trainingPassed = true;
+
+    /** 工具复检是否通过（暂停后复岗条件之一） */
+    @Column(nullable = false)
+    private Boolean toolReinspected = true;
+
     @Column(nullable = false)
     private Boolean active = true;
 }

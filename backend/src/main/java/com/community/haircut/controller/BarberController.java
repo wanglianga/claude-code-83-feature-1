@@ -111,12 +111,19 @@ public class BarberController {
         return Result.ok(barberService.saveToolKit(barberId, request.name(), request.items(), request.notes()));
     }
 
+    public record DisinfectRequest(String sealNo, String method, String cabinetNo, String responsiblePerson) {
+    }
+
     @PostMapping("/{barberId}/toolkit/disinfect")
-    public Result<ToolKit> disinfect(@PathVariable Long barberId) {
+    public Result<ToolKit> disinfect(@PathVariable Long barberId, @RequestBody(required = false) DisinfectRequest request) {
         LoginUser u = SecurityUtils.get();
         if (u.getRole() != Role.ADMIN && u.getRole() != Role.STAFF && !u.getUserId().equals(barberId)) {
             throw new com.community.haircut.common.BizException(403, "无权限");
         }
-        return Result.ok(barberService.disinfect(barberId));
+        if (request == null) {
+            return Result.ok(barberService.disinfect(barberId, null, null, null, null));
+        }
+        return Result.ok(barberService.disinfect(barberId, request.sealNo(), request.method(),
+                request.cabinetNo(), request.responsiblePerson()));
     }
 }

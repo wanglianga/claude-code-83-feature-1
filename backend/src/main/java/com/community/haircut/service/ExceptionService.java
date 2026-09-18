@@ -51,7 +51,9 @@ public class ExceptionService {
         record.setDescription(description);
         record.setFinanceInvolved(type == ExceptionType.REFUSE_PAYMENT
                 || type == ExceptionType.SUBSIDY_CHANGE
-                || type == ExceptionType.SKIN_CUT);
+                || type == ExceptionType.SKIN_CUT
+                || type == ExceptionType.INFECTION_COMPLAINT
+                || type == ExceptionType.TOOL_DISINFECTION);
         exceptionRepository.save(record);
 
         order.setHasException(true);
@@ -63,6 +65,10 @@ public class ExceptionService {
             case SKIN_CUT -> adjustBarberCredit(order.getBarberId(), -10, p -> p.setIncidentCount(p.getIncidentCount() + 1));
             case TOOL_MISSING -> adjustBarberCredit(order.getBarberId(), -3, p -> {
             });
+            case TOOL_DISINFECTION -> adjustBarberCredit(order.getBarberId(), -8, p -> {
+            });
+            case INFECTION_COMPLAINT -> adjustBarberCredit(order.getBarberId(), -10,
+                    p -> p.setIncidentCount(p.getIncidentCount() + 1));
             case REFUSE_PAYMENT -> order.setPaymentStatus(PaymentStatus.DISPUTED);
             default -> {
             }
@@ -181,6 +187,8 @@ public class ExceptionService {
             case REFUSE_PAYMENT -> "老人拒绝付款";
             case SUBSIDY_CHANGE -> "补贴资格变化";
             case TOOL_MISSING -> "工具遗漏";
+            case TOOL_DISINFECTION -> "工具消毒失效";
+            case INFECTION_COMPLAINT -> "交叉感染投诉";
         };
     }
 }
