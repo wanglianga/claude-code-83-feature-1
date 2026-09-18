@@ -3,12 +3,15 @@ package com.community.haircut.controller;
 import com.community.haircut.common.Result;
 import com.community.haircut.entity.BarberProfile;
 import com.community.haircut.entity.BarberSchedule;
+import com.community.haircut.entity.DisinfectionRecord;
 import com.community.haircut.entity.ToolKit;
 import com.community.haircut.entity.User;
+import com.community.haircut.enums.DisinfectionMethod;
 import com.community.haircut.enums.Role;
 import com.community.haircut.security.LoginUser;
 import com.community.haircut.security.SecurityUtils;
 import com.community.haircut.service.BarberService;
+import com.community.haircut.service.OrderService;
 import com.community.haircut.service.UserService;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -97,6 +100,96 @@ public class BarberController {
     @GetMapping("/{barberId}/toolkit")
     public Result<ToolKit> getToolKit(@PathVariable Long barberId) {
         return Result.ok(barberService.getToolKit(barberId));
+    }
+
+    /** 理发师全部工具包（主包 + 上门备用服务包），含实时核验结论 */
+    @GetMapping("/{barberId}/kits")
+    public Result<List<Map<String, Object>>> listKits(@PathVariable Long barberId) {
+        return Result.ok(barberService.listKits(barberId));
+    }
+
+    /** 上门前扫码核验服务包封签 */
+    @GetMapping("/{barberId}/scan")
+    public Result<Map<String, Object>> scan(@PathVariable Long barberId, @RequestParam String sealCode) {
+        LoginUser u = SecurityUtils.get();
+        if (u.getRole() != Role.ADMIN && u.getRole() != Role.STAFF && !u.getUserId().equals(barberId)) {
+            throw new com.community.haircut.common.BizException(403, "无权限");
+        }
+        return Result.ok(barberService.scanBySeal(barberId, sealCode));
+    }
+
+    /** 新建上门备用服务包 */
+    public record SpareKitRequest(String name, String items) {
+    }
+
+    @PostMapping("/{barberId}/spare-kits")
+    public Result<ToolKit> createSpareKit(@PathVariable Long barberId, @RequestBody SpareKitRequest request) {
+        LoginUser u = SecurityUtils.get();
+        if (u.getRole() != Role.ADMIN && u.getRole() != Role.STAFF && !u.getUserId().equals(barberId)) {
+            throw new com.community.haircut.common.BizException(403, "无权限");
+        }
+        return Result.ok(barberService.createSpareKit(barberId, request.name(), request.items()));
+    }
+
+    /** 消毒记录查询（社区可查全部；理发师查本人或指定包） */
+    @GetMapping("/disinfections")
+    public Result<List<DisinfectionRecord>> disinfections(@RequestParam(required = false) Long barberId,
+                                                          @RequestParam(required = false) Long kitId) {
+        return Result.ok(barberService.listDisinfections(barberId, kitId));
+    }
+
+    public record DisinfectionRequest(@NotNull Long kitId, String method, String cabinetNo,
+                                      String responsiblePerson, String sealCode, Integer validHours,
+                                      boolean supplementary, Long orderId, String note) {
+    }
+
+    /** 消毒登记 / 备用服务包使用后补录 */
+    @PostMapping("/disinfections")
+    public Result<DisinfectionRecord> recordDisinfection(@RequestBody DisinfectionRequest request) {
+        return Result.ok(barberService.recordDisinfection(request.kitId(),
+                DisinfectionMethod.valueOf(request.method()), request.cabinetNo(), request.responsiblePerson(),
+                request.sealCode(), request.validHours(), request.supplementary(), request.orderId(),
+                request.note(), op()));
+    }
+
+    /** 登记封签破损 */
+    @PostMapping("/kits/{kitId}/seal-broken")
+    public Result<ToolKit> markSealBroken(@PathVariable Long kitId) {
+        LoginUser u = SecurityUtils.get();
+        if (u.getRole() != Role.ADMIN && u.getRole() != Role.STAFF) {
+            throw new com.community.haircut.common.BizException(403, "仅社区可登记封签破损");
+        }
+        return Result.ok(barberService.markSealBroken(kitId, op()));
+    }
+
+    /** 社区确认消毒培训完成 */
+    @PostMapping("/{userId}/training")
+    public Result<BarberProfile> completeTraining(@PathVariable Long userId, @RequestBody(required = false) Map<String, String> body) {
+        SecurityUtils.requireRole(Role.STAFF, Role.ADMIN);
+        String note = body == null ? null : body.get("note");
+        return Result.ok(barberService.completeTraining(userId, note, op()));
+    }
+
+    /** 社区安排工具复检并登记结果 */
+    public record RecheckRequest(boolean passed, String note) {
+    }
+
+    @PostMapping("/{userId}/recheck")
+    public Result<BarberProfile> recheckTools(@PathVariable Long userId, @RequestBody RecheckRequest request) {
+        SecurityUtils.requireRole(Role.STAFF, Role.ADMIN);
+        return Result.ok(barberService.recheckTools(userId, request.passed(), request.note(), op()));
+    }
+
+    /** 培训+复检通过后恢复上门资格 */
+    @PostMapping("/{userId}/reinstate")
+    public Result<BarberProfile> reinstate(@PathVariable Long userId) {
+        SecurityUtils.requireRole(Role.STAFF, Role.ADMIN);
+        return Result.ok(barberService.reinstate(userId, op()));
+    }
+
+    private OrderService.LoginUserInfo op() {
+        LoginUser u = SecurityUtils.get();
+        return new OrderService.LoginUserInfo(u.getUserId(), u.getRealName(), u.getRole());
     }
 
     public record ToolKitRequest(String name, String items, String notes) {

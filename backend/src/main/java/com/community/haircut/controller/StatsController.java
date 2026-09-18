@@ -49,4 +49,11 @@ public class StatsController {
         SecurityUtils.requireRole(Role.STAFF, Role.ADMIN, Role.GRID);
         return Result.ok(statsService.alerts());
     }
+
+    /** 工具消毒、交叉感染投诉、复检与空跑补偿复盘 */
+    @GetMapping("/infection-review")
+    public Result<Map<String, Object>> infectionReview() {
+        SecurityUtils.requireRole(Role.STAFF, Role.ADMIN, Role.FINANCE);
+        return Result.ok(statsService.infectionReview());
+    }
 }

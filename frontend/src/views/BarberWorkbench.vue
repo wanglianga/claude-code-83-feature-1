@@ -54,16 +54,20 @@
           <template #header>
             <div class="card-head">
               <span>我的工具包</span>
-              <el-tag v-if="toolkit" :type="DISINFECTION_TYPES[effectiveStatus]" size="small">
-                {{ DISINFECTION_LABELS[effectiveStatus] }}
-              </el-tag>
+              <el-space :size="4">
+                <el-tag v-if="toolkit" :type="DISINFECTION_TYPES[effectiveStatus]" size="small">
+                  {{ DISINFECTION_LABELS[effectiveStatus] }}
+                </el-tag>
+                <el-button link type="primary" size="small" @click="$router.push('/tool-disinfection')">消毒/备用包</el-button>
+              </el-space>
             </div>
           </template>
           <template v-if="toolkit">
             <p><b>{{ toolkit.name }}</b></p>
-            <p class="muted">清单：{{ toolkit.items }}</p>
+            <p class="muted">封签编号：{{ toolkit.sealCode || '未加封' }}</p>
             <p class="muted">上次消毒：{{ toolkit.disinfectedAt || '从未消毒' }}</p>
-            <p class="muted">消毒 48 小时内有效，过期将无法被派单</p>
+            <p class="muted">消毒方式：{{ DISINFECTION_METHOD_LABELS[toolkit.disinfectionMethod] || '未登记' }}；消毒柜 {{ toolkit.cabinetNo || '—' }}；责任人 {{ toolkit.responsiblePerson || '—' }}</p>
+            <p class="muted">消毒 48 小时内有效，过期/封签破损将无法派单且不可开始服务</p>
             <el-button type="primary" size="small" style="margin-top: 8px" @click="doDisinfect">完成消毒</el-button>
           </template>
           <el-empty v-else description="暂无工具包" :image-size="40" />
@@ -114,7 +118,7 @@ import {
   listOrders, listBarbers, listSchedules, addSchedule, deleteSchedule, getToolKit, disinfectToolKit
 } from '../api'
 import { useUserStore } from '../store/user'
-import { ORDER_STATUS_LABELS, ORDER_STATUS_TYPES, DISINFECTION_LABELS, DISINFECTION_TYPES } from '../utils/labels'
+import { ORDER_STATUS_LABELS, ORDER_STATUS_TYPES, DISINFECTION_LABELS, DISINFECTION_TYPES, DISINFECTION_METHOD_LABELS } from '../utils/labels'
 
 const store = useUserStore()
 const orders = ref([])

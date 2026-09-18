@@ -46,10 +46,41 @@ export const EXCEPTION_TYPE_LABELS = {
   SKIN_CUT: '皮肤划伤',
   REFUSE_PAYMENT: '老人拒绝付款',
   SUBSIDY_CHANGE: '补贴资格变化',
-  TOOL_MISSING: '工具遗漏'
+  TOOL_MISSING: '工具遗漏',
+  TOOL_DISINFECTION_EXPIRED: '消毒超过有效期',
+  TOOL_SEAL_BROKEN: '服务包封签破损',
+  TOOL_DAMP: '毛巾/围布受潮',
+  TOOL_STAINED: '剪刀/剃刀有污渍',
+  TOOL_NONCOMPLIANT_USE: '已用未达标工具完成服务',
+  INFECTION_FEEDBACK: '皮肤瘙痒/红疹/感染反馈'
 }
 export const EXCEPTION_STATUS_LABELS = { OPEN: '待处理', PROCESSING: '处理中', RESOLVED: '已解决' }
 export const EXCEPTION_STATUS_TYPES = { OPEN: 'danger', PROCESSING: 'warning', RESOLVED: 'success' }
+
+export const DISINFECTION_METHOD_LABELS = {
+  UV: '紫外线消毒柜',
+  HIGH_TEMP: '高温蒸煮',
+  CHLORINE: '含氯消毒剂浸泡',
+  DISPOSABLE: '一次性用品'
+}
+
+export const KIT_TYPE_LABELS = { MAIN: '主工具包', SPARE: '上门备用服务包' }
+
+export const INFECTION_CASE_STATUS_LABELS = {
+  OPEN: '待反查通知',
+  NOTIFIED: '已通知随访中',
+  CONFIRMED: '已确认并处置',
+  RULED_OUT: '已排除'
+}
+export const INFECTION_CASE_STATUS_TYPES = { OPEN: 'danger', NOTIFIED: 'warning', CONFIRMED: 'success', RULED_OUT: 'info' }
+
+export const COMPENSATION_STATUS_LABELS = {
+  PENDING: '待认定',
+  COMMUNITY_APPROVED: '公益资金补偿',
+  BARBER_BORNE: '理发师承担',
+  WAIVED: '无需补偿'
+}
+export const COMPENSATION_STATUS_TYPES = { PENDING: 'warning', COMMUNITY_APPROVED: 'success', BARBER_BORNE: 'danger', WAIVED: 'info' }
 
 export const SUBSIDY_STATUS_LABELS = { PENDING: '待审核', APPROVED: '已发放', REJECTED: '已驳回' }
 export const SUBSIDY_STATUS_TYPES = { PENDING: 'warning', APPROVED: 'success', REJECTED: 'danger' }

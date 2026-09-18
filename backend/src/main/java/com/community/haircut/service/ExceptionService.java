@@ -23,16 +23,19 @@ public class ExceptionService {
     private final ElderRepository elderRepository;
     private final OrderService orderService;
     private final NotificationService notificationService;
+    private final InfectionTraceService infectionTraceService;
 
     public ExceptionService(ExceptionRecordRepository exceptionRepository, ServiceOrderRepository orderRepository,
                             BarberProfileRepository barberProfileRepository, ElderRepository elderRepository,
-                            OrderService orderService, NotificationService notificationService) {
+                            OrderService orderService, NotificationService notificationService,
+                            InfectionTraceService infectionTraceService) {
         this.exceptionRepository = exceptionRepository;
         this.orderRepository = orderRepository;
         this.barberProfileRepository = barberProfileRepository;
         this.elderRepository = elderRepository;
         this.orderService = orderService;
         this.notificationService = notificationService;
+        this.infectionTraceService = infectionTraceService;
     }
 
     @Transactional
@@ -63,6 +66,13 @@ public class ExceptionService {
             case SKIN_CUT -> adjustBarberCredit(order.getBarberId(), -10, p -> p.setIncidentCount(p.getIncidentCount() + 1));
             case TOOL_MISSING -> adjustBarberCredit(order.getBarberId(), -3, p -> {
             });
+            // 消毒失责类：过期/封签破损/受潮/污渍均扣减信用分
+            case TOOL_DISINFECTION_EXPIRED, TOOL_SEAL_BROKEN, TOOL_DAMP, TOOL_STAINED ->
+                    adjustBarberCredit(order.getBarberId(), -5, p -> {
+                    });
+            // 已用未达标工具完成服务：重扣信用并等待追溯结论进一步处置
+            case TOOL_NONCOMPLIANT_USE -> adjustBarberCredit(order.getBarberId(), -15,
+                    p -> p.setIncidentCount(p.getIncidentCount() + 1));
             case REFUSE_PAYMENT -> order.setPaymentStatus(PaymentStatus.DISPUTED);
             default -> {
             }
@@ -71,6 +81,12 @@ public class ExceptionService {
 
         orderService.addEvent(orderId, "EXCEPTION", operator.userId(), operator.realName(), operator.role(),
                 "上报异常【" + typeName(type) + "】：" + description);
+
+        // 皮肤瘙痒/红疹/感染反馈，或已用未达标工具完成服务：自动发起交叉感染追溯反查
+        if (type == ExceptionType.INFECTION_FEEDBACK || type == ExceptionType.TOOL_NONCOMPLIANT_USE) {
+            infectionTraceService.createCase(orderId, type == ExceptionType.INFECTION_FEEDBACK
+                    ? "皮肤瘙痒/红疹/感染反馈：" + description : "已用未达标工具完成服务", description, operator);
+        }
 
         // 通知社区与财务（同一服务单协同）
         notificationService.notifyRole(Role.STAFF, "服务单异常 " + order.getOrderNo(),
@@ -181,6 +197,12 @@ public class ExceptionService {
             case REFUSE_PAYMENT -> "老人拒绝付款";
             case SUBSIDY_CHANGE -> "补贴资格变化";
             case TOOL_MISSING -> "工具遗漏";
+            case TOOL_DISINFECTION_EXPIRED -> "消毒超过有效期";
+            case TOOL_SEAL_BROKEN -> "服务包封签破损";
+            case TOOL_DAMP -> "毛巾/围布受潮";
+            case TOOL_STAINED -> "剪刀/剃刀有污渍";
+            case TOOL_NONCOMPLIANT_USE -> "已用未达标工具完成服务";
+            case INFECTION_FEEDBACK -> "皮肤瘙痒/红疹/感染反馈";
         };
     }
 }

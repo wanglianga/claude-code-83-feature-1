@@ -26,12 +26,18 @@ public class StatsService {
     private final ExceptionRecordRepository exceptionRepository;
     private final CareTaskRepository careTaskRepository;
     private final FollowUpRepository followUpRepository;
+    private final InfectionCaseRepository infectionCaseRepository;
+    private final InfectionContactRepository infectionContactRepository;
+    private final DisinfectionRecordRepository disinfectionRecordRepository;
 
     public StatsService(ElderRepository elderRepository, ServiceOrderRepository orderRepository,
                         BarberProfileRepository barberProfileRepository,
                         VolunteerProfileRepository volunteerProfileRepository, UserRepository userRepository,
                         SubsidyRecordRepository subsidyRepository, ExceptionRecordRepository exceptionRepository,
-                        CareTaskRepository careTaskRepository, FollowUpRepository followUpRepository) {
+                        CareTaskRepository careTaskRepository, FollowUpRepository followUpRepository,
+                        InfectionCaseRepository infectionCaseRepository,
+                        InfectionContactRepository infectionContactRepository,
+                        DisinfectionRecordRepository disinfectionRecordRepository) {
         this.elderRepository = elderRepository;
         this.orderRepository = orderRepository;
         this.barberProfileRepository = barberProfileRepository;
@@ -41,6 +47,9 @@ public class StatsService {
         this.exceptionRepository = exceptionRepository;
         this.careTaskRepository = careTaskRepository;
         this.followUpRepository = followUpRepository;
+        this.infectionCaseRepository = infectionCaseRepository;
+        this.infectionContactRepository = infectionContactRepository;
+        this.disinfectionRecordRepository = disinfectionRecordRepository;
     }
 
     public Map<String, Object> dashboard() {
@@ -57,6 +66,12 @@ public class StatsService {
                 + exceptionRepository.findByStatusOrderByCreatedAtDesc(ExceptionStatus.PROCESSING).size());
         map.put("pendingCareTasks", careTaskRepository.findByStatusOrderByCreatedAtDesc(CareTaskStatus.PENDING).size());
         map.put("pendingFollowUps", followUpRepository.findByStatusOrderByCreatedAtDesc(FollowUpStatus.PENDING).size());
+        map.put("openInfectionCases", infectionCaseRepository.findAll().stream()
+                .filter(c -> c.getStatus() != InfectionCaseStatus.CONFIRMED && c.getStatus() != InfectionCaseStatus.RULED_OUT)
+                .count());
+        map.put("pendingCompensation", orderRepository.findAll().stream()
+                .filter(o -> Boolean.TRUE.equals(o.getEmptyRun()) && o.getCompensationStatus() == CompensationStatus.PENDING)
+                .count());
         BigDecimal subsidyTotal = subsidyRepository.findAll().stream()
                 .filter(s -> s.getStatus() != SubsidyStatus.REJECTED)
                 .map(SubsidyRecord::getAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -167,6 +182,61 @@ public class StatsService {
         return map;
     }
 
+    /** 工具消毒、交叉感染投诉、复检与空跑补偿复盘 */
+    public Map<String, Object> infectionReview() {
+        Map<String, Object> map = new HashMap<>();
+        List<InfectionCase> cases = infectionCaseRepository.findAll();
+        map.put("caseTotal", cases.size());
+        map.put("caseOpen", cases.stream().filter(c -> c.getStatus() != InfectionCaseStatus.CONFIRMED
+                && c.getStatus() != InfectionCaseStatus.RULED_OUT).count());
+        map.put("caseConfirmed", cases.stream().filter(c -> c.getStatus() == InfectionCaseStatus.CONFIRMED).count());
+
+        List<InfectionContact> contacts = infectionContactRepository.findAll();
+        map.put("contactTotal", contacts.size());
+        map.put("contactNotified", contacts.stream().filter(InfectionContact::getFamilyNotified).count());
+        map.put("contactInfected", contacts.stream().filter(InfectionContact::getConfirmedInfected).count());
+
+        // 消毒/补录登记
+        List<DisinfectionRecord> disinfections = disinfectionRecordRepository.findAll();
+        map.put("disinfectionTotal", disinfections.size());
+        map.put("supplementaryTotal", disinfections.stream().filter(DisinfectionRecord::getSupplementary).count());
+
+        // 理发师消毒责任与资格
+        List<Map<String, Object>> barbers = new ArrayList<>();
+        for (BarberProfile p : barberProfileRepository.findAll()) {
+            Map<String, Object> m = new HashMap<>();
+            userRepository.findById(p.getUserId()).ifPresent(u -> m.put("name", u.getRealName()));
+            m.put("profile", p);
+            barbers.add(m);
+        }
+        map.put("barbers", barbers);
+
+        // 空跑补偿认定
+        List<ServiceOrder> emptyRunOrders = orderRepository.findAll().stream()
+                .filter(o -> Boolean.TRUE.equals(o.getEmptyRun())).toList();
+        map.put("emptyRunTotal", emptyRunOrders.size());
+        map.put("compensationPending", emptyRunOrders.stream()
+                .filter(o -> o.getCompensationStatus() == CompensationStatus.PENDING).count());
+        map.put("communityCompensationTotal", emptyRunOrders.stream()
+                .filter(o -> o.getCompensationStatus() == CompensationStatus.COMMUNITY_APPROVED)
+                .map(ServiceOrder::getCompensationAmount).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
+        map.put("barberBorneTotal", emptyRunOrders.stream()
+                .filter(o -> o.getCompensationStatus() == CompensationStatus.BARBER_BORNE).count());
+
+        // 工具类异常投诉统计
+        map.put("toolExceptions", exceptionRepository.findAll().stream()
+                .filter(e -> e.getType() == ExceptionType.TOOL_DISINFECTION_EXPIRED
+                        || e.getType() == ExceptionType.TOOL_SEAL_BROKEN
+                        || e.getType() == ExceptionType.TOOL_DAMP
+                        || e.getType() == ExceptionType.TOOL_STAINED
+                        || e.getType() == ExceptionType.TOOL_MISSING
+                        || e.getType() == ExceptionType.TOOL_NONCOMPLIANT_USE
+                        || e.getType() == ExceptionType.INFECTION_FEEDBACK)
+                .count());
+        return map;
+    }
+
     /** 预警名单：长期未预约 / 连续取消 */
     public Map<String, Object> alerts() {
         List<Elder> elders = elderRepository.findByStatus("ACTIVE");
@@ -193,6 +263,10 @@ public class StatsService {
             int cancels = 0;
             for (ServiceOrder o : mine) {
                 if (o.getStatus() == OrderStatus.CANCELLED) {
+                    // 工具问题取消不算老人违约
+                    if ("TOOL_ISSUE".equals(o.getCancelSource())) {
+                        continue;
+                    }
                     cancels++;
                 } else {
                     break;

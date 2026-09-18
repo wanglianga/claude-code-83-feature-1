@@ -37,6 +37,12 @@
         <el-button v-if="['ADMIN', 'STAFF', 'FINANCE', 'BARBER', 'VOLUNTEER'].includes(role)" @click="$router.push('/exceptions')">
           异常处理<el-badge v-if="stats.openExceptions" :value="stats.openExceptions" type="danger" style="margin-left: 4px" />
         </el-button>
+        <el-button v-if="['ADMIN', 'STAFF', 'BARBER'].includes(role)" type="warning" plain @click="$router.push('/tool-disinfection')">
+          工具消毒与备用包
+        </el-button>
+        <el-button v-if="['ADMIN', 'STAFF', 'FINANCE', 'VOLUNTEER', 'GRID'].includes(role)" type="danger" plain @click="$router.push('/infection-trace')">
+          交叉感染追溯<el-badge v-if="stats.openInfectionCases" :value="stats.openInfectionCases" type="danger" style="margin-left: 4px" />
+        </el-button>
         <el-button v-if="['FINANCE', 'ADMIN', 'STAFF'].includes(role)" @click="$router.push('/finance')">
           补贴审核<el-badge v-if="stats.pendingSubsidy" :value="stats.pendingSubsidy" type="warning" style="margin-left: 4px" />
         </el-button>

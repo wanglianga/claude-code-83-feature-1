@@ -78,15 +78,70 @@ public class OrderController {
         return Result.ok(orderService.detail(id));
     }
 
-    public record ToolConfirmRequest(boolean toolsOk, boolean capeOk, boolean disinfectantOk, boolean packOk,
-                                     String missingItems) {
+    public record ToolConfirmRequest(String sealCode, boolean sealIntact, boolean disinfectionValid,
+                                     boolean methodOk, boolean cabinetOk, boolean responsibleOk,
+                                     boolean toolsOk, boolean toolsClean, boolean capeOk, boolean clothDry,
+                                     boolean disinfectantOk, boolean packOk, String missingItems,
+                                     boolean infectionRisk, String infectionRiskReason,
+                                     boolean toolsSeparated, String postUseHandling, boolean disposableUsed) {
     }
 
     @PostMapping("/{id}/confirm-tools")
     public Result<ToolConfirmation> confirmTools(@PathVariable Long id, @RequestBody ToolConfirmRequest request) {
         SecurityUtils.requireRole(Role.BARBER, Role.STAFF, Role.ADMIN);
-        return Result.ok(orderService.confirmTools(id, request.toolsOk(), request.capeOk(),
-                request.disinfectantOk(), request.packOk(), request.missingItems(), op()));
+        return Result.ok(orderService.confirmTools(id, request.sealCode(), request.sealIntact(),
+                request.disinfectionValid(), request.methodOk(), request.cabinetOk(), request.responsibleOk(),
+                request.toolsOk(), request.toolsClean(), request.capeOk(), request.clothDry(),
+                request.disinfectantOk(), request.packOk(), request.missingItems(),
+                request.infectionRisk(), request.infectionRiskReason(),
+                request.toolsSeparated(), request.postUseHandling(), request.disposableUsed(), op()));
+    }
+
+    /** 核验不达标时启用社区备用服务包 */
+    @PostMapping("/{id}/activate-spare")
+    public Result<ServiceOrder> activateSpare(@PathVariable Long id, @RequestBody Map<String, Long> body) {
+        SecurityUtils.requireRole(Role.BARBER, Role.STAFF, Role.ADMIN);
+        Long spareKitId = body == null ? null : body.get("spareKitId");
+        if (spareKitId == null) {
+            throw new com.community.haircut.common.BizException("请选择备用服务包");
+        }
+        return Result.ok(orderService.activateSpareKit(id, spareKitId, op()));
+    }
+
+    /** 工具问题联系社区改约（不算老人违约、不扣补贴） */
+    public record ToolRescheduleRequest(@NotNull @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate newDate,
+                                        @NotNull String newTimeSlot, String reason) {
+    }
+
+    @PostMapping("/{id}/reschedule-tool-issue")
+    public Result<Void> rescheduleForToolIssue(@PathVariable Long id, @RequestBody ToolRescheduleRequest request) {
+        SecurityUtils.requireRole(Role.BARBER, Role.STAFF, Role.ADMIN);
+        orderService.rescheduleForToolIssue(id, request.newDate(), request.newTimeSlot(), request.reason(), op());
+        return Result.ok();
+    }
+
+    /** 工具问题取消（不算老人违约、不扣补贴；可标记理发师空跑） */
+    public record ToolCancelRequest(String reason, boolean emptyRun) {
+    }
+
+    @PostMapping("/{id}/cancel-tool-issue")
+    public Result<Void> cancelForToolIssue(@PathVariable Long id, @RequestBody ToolCancelRequest request) {
+        SecurityUtils.requireRole(Role.BARBER, Role.STAFF, Role.ADMIN);
+        orderService.cancelForToolIssue(id, request.reason(), request.emptyRun(), op());
+        return Result.ok();
+    }
+
+    /** 社区/财务认定理发师空跑补偿 */
+    public record CompensationRequest(String result, java.math.BigDecimal amount, String note) {
+    }
+
+    @PostMapping("/{id}/compensation")
+    public Result<Void> adjudicateCompensation(@PathVariable Long id, @RequestBody CompensationRequest request) {
+        SecurityUtils.requireRole(Role.STAFF, Role.ADMIN, Role.FINANCE);
+        orderService.adjudicateCompensation(id,
+                com.community.haircut.enums.CompensationStatus.valueOf(request.result()),
+                request.amount(), request.note(), op());
+        return Result.ok();
     }
 
     public record CheckInRequest(boolean entrySafe, String elderState, String mentalState,

@@ -10,16 +10,17 @@
               {{ ORDER_STATUS_LABELS[order.status] }}
             </el-tag>
             <el-tag v-if="order.hasException" type="danger" style="margin-left: 4px">有异常</el-tag>
+            <el-tag v-if="order.infectionRisk" type="danger" effect="dark" style="margin-left: 4px">感染风险</el-tag>
+            <el-tag v-if="order.spareUsed" type="warning" style="margin-left: 4px">已用备用服务包</el-tag>
+            <el-tag v-if="order.emptyRun" type="info" style="margin-left: 4px">理发师空跑</el-tag>
             <el-tag style="margin-left: 4px" effect="plain">{{ ORDER_TYPE_LABELS[order.type] }}</el-tag>
           </div>
           <el-space wrap>
-            <!-- 理发师动作 -->
-            <el-button v-if="canConfirmTools" type="primary" @click="toolDialog = true">上门前工具确认</el-button>
+            <el-button v-if="canConfirmTools" type="primary" @click="openToolDialog">上门前扫码核验</el-button>
             <el-button v-if="canStart" type="primary" @click="doStart">开始服务</el-button>
             <el-button v-if="canComplete" type="success" @click="completeDialog = true">完成服务</el-button>
-            <!-- 志愿者动作 -->
             <el-button v-if="canCheckIn" type="warning" @click="checkInDialog = true">志愿者进门核对</el-button>
-            <!-- 通用动作 -->
+            <el-button v-if="canReportInfection" type="danger" plain @click="infectionDialog = true">反馈皮肤/感染</el-button>
             <el-button v-if="canRate" type="primary" plain @click="rateDialog = true">满意度评价</el-button>
             <el-button v-if="canConfirmPay" type="success" plain @click="doConfirmPay">确认收款</el-button>
             <el-button v-if="!isFinished" type="warning" plain @click="exceptionDialog = true">上报异常</el-button>
@@ -38,9 +39,32 @@
             <el-tag v-if="order.livingAlone" size="small" type="danger" style="margin-left: 4px">独居</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="需家属在场">{{ order.needFamilyPresent ? '是' : '否' }}</el-descriptions-item>
+          <el-descriptions-item label="感染风险" :span="2">
+            <template v-if="order.infectionRisk">
+              <el-tag size="small" type="danger">已标记</el-tag>
+              <span class="muted">{{ order.infectionRiskReason }}</span>
+            </template>
+            <span v-else>无</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="实际使用工具包" :span="2">
+            {{ order.usedKitName || '—' }}
+            <el-tag v-if="order.usedKitCompliant === false" size="small" type="danger" style="margin-left: 4px">未达标</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="用后处理" :span="2">{{ order.postUseHandling || '—' }}</el-descriptions-item>
           <el-descriptions-item label="费用">总价 ¥{{ order.totalAmount }}，补贴 ¥{{ order.subsidyAmount }}，自费 ¥{{ order.selfPayAmount }}</el-descriptions-item>
           <el-descriptions-item label="支付状态">
             <el-tag size="small" :type="PAYMENT_TYPES[order.paymentStatus]">{{ PAYMENT_LABELS[order.paymentStatus] }}</el-tag>
+          </el-descriptions-item>
+          <el-descriptions-item label="空跑补偿" :span="2">
+            <template v-if="order.compensationStatus">
+              <el-tag size="small" :type="COMPENSATION_STATUS_TYPES[order.compensationStatus]">
+                {{ COMPENSATION_STATUS_LABELS[order.compensationStatus] }}
+              </el-tag>
+              <span v-if="order.compensationAmount" class="muted"> ¥{{ order.compensationAmount }}</span>
+              <el-button v-if="canAdjudicate" link type="primary" @click="compDialog = true">认定补偿</el-button>
+              <div v-if="order.compensationNote" class="muted">{{ order.compensationNote }}</div>
+            </template>
+            <span v-else>—</span>
           </el-descriptions-item>
           <el-descriptions-item label="满意度" :span="2">
             <template v-if="order.satisfactionRating">
@@ -58,20 +82,66 @@
           <el-card shadow="never">
             <template #header>服务过程档案</template>
             <el-collapse v-model="activePanels">
-              <el-collapse-item title="① 理发师上门前工具确认" name="tool">
+              <el-collapse-item title="① 理发师上门前扫码核验（封签/消毒日期/方式/消毒柜/责任人）" name="tool">
                 <template v-if="detail.toolConfirmation">
-                  <el-space wrap>
-                    <el-tag :type="tagType(detail.toolConfirmation.toolsOk)">理发工具</el-tag>
-                    <el-tag :type="tagType(detail.toolConfirmation.capeOk)">围布</el-tag>
-                    <el-tag :type="tagType(detail.toolConfirmation.disinfectantOk)">消毒用品</el-tag>
-                    <el-tag :type="tagType(detail.toolConfirmation.packOk)">服务包</el-tag>
-                  </el-space>
+                  <el-descriptions :column="2" size="small" border>
+                    <el-descriptions-item label="封签编号">{{ detail.toolConfirmation.sealCode || '—' }}</el-descriptions-item>
+                    <el-descriptions-item label="封签完好">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.sealIntact)">{{ detail.toolConfirmation.sealIntact ? '完好' : '破损' }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="消毒在有效期内">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.disinfectionValid)">{{ detail.toolConfirmation.disinfectionValid ? '有效' : '过期' }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="消毒方式合规">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.methodOk)">{{ detail.toolConfirmation.methodOk ? '可查' : '缺失' }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="消毒柜编号">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.cabinetOk)">{{ detail.toolConfirmation.cabinetOk ? '可查' : '缺失' }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="消毒责任人">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.responsibleOk)">{{ detail.toolConfirmation.responsibleOk ? '可查' : '缺失' }}</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="工具齐备">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.toolsOk)">齐备</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="剪刀/剃刀清洁">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.toolsClean)">无污渍</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="围布齐备">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.capeOk)">齐备</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="毛巾/围布干燥">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.clothDry)">干燥</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="消毒用品">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.disinfectantOk)">齐备</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="服务包">
+                      <el-tag size="small" :type="tagType(detail.toolConfirmation.packOk)">齐备</el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="感染风险服务" :span="2">
+                      <el-tag size="small" :type="detail.toolConfirmation.infectionRisk ? 'danger' : 'info'">
+                        {{ detail.toolConfirmation.infectionRisk ? '是：' + detail.toolConfirmation.infectionRiskReason : '否' }}
+                      </el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="工具单独分装">
+                      <el-tag size="small" :type="tagType(!detail.toolConfirmation.infectionRisk || detail.toolConfirmation.toolsSeparated)">
+                        {{ detail.toolConfirmation.toolsSeparated ? '已单独分装' : '未分装' }}
+                      </el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="一次性用品">
+                      <el-tag size="small" :type="detail.toolConfirmation.disposableUsed ? 'warning' : 'info'">
+                        {{ detail.toolConfirmation.disposableUsed ? '已使用' : '未使用' }}
+                      </el-tag>
+                    </el-descriptions-item>
+                    <el-descriptions-item label="用后处理" :span="2">{{ detail.toolConfirmation.postUseHandling || '—' }}</el-descriptions-item>
+                  </el-descriptions>
                   <p v-if="detail.toolConfirmation.missingItems" class="warn-text">
-                    遗漏：{{ detail.toolConfirmation.missingItems }}
+                    不达标/遗漏：{{ detail.toolConfirmation.missingItems }}
                   </p>
                   <p class="time">{{ detail.toolConfirmation.confirmedAt }}</p>
                 </template>
-                <el-empty v-else description="待理发师确认" :image-size="40" />
+                <el-empty v-else description="待理发师上门扫码核验" :image-size="40" />
               </el-collapse-item>
               <el-collapse-item title="② 志愿者陪同记录（进门安全 / 老人状态 / 家属授权）" name="visit">
                 <template v-if="detail.visitRecord">
@@ -109,7 +179,7 @@
           <el-card shadow="never" style="margin-top: 16px">
             <template #header>异常记录（老人/家属/理发师/志愿者/社区/财务协同处理）</template>
             <el-table :data="exceptions" size="small" empty-text="无异常">
-              <el-table-column label="类型" width="110">
+              <el-table-column label="类型" width="150">
                 <template #default="{ row }">{{ EXCEPTION_TYPE_LABELS[row.type] }}</template>
               </el-table-column>
               <el-table-column prop="description" label="描述" min-width="180" show-overflow-tooltip />
@@ -145,6 +215,23 @@
             </el-timeline>
           </el-card>
 
+          <!-- 备用服务包 -->
+          <el-card v-if="canConfirmTools && detail.spareKits?.length" shadow="never" style="margin-top: 16px">
+            <template #header>社区备用服务包（核验不达标时启用）</template>
+            <div v-for="s in detail.spareKits" :key="s.kit.id" class="spare-item">
+              <div>
+                <b>{{ s.kit.name }}</b>
+                <el-tag size="small" :type="s.checks.length ? 'danger' : 'success'" style="margin-left: 6px">
+                  {{ s.checks.length ? '不可用' : '可启用' }}
+                </el-tag>
+              </div>
+              <div class="muted">封签 {{ s.kit.sealCode || '—' }}；消毒 {{ s.kit.disinfectedAt }}</div>
+              <div v-if="s.checks.length" class="warn-text">{{ s.checks.join('；') }}</div>
+              <el-button size="small" type="warning" :disabled="s.checks.length > 0"
+                         @click="doActivateSpare(s.kit.id)">启用此备用包</el-button>
+            </div>
+          </el-card>
+
           <!-- 补贴与回访 -->
           <el-card shadow="never" style="margin-top: 16px" v-if="detail.subsidies?.length || detail.followUps?.length">
             <template #header>补贴与回访</template>
@@ -164,20 +251,90 @@
       </el-row>
     </template>
 
-    <!-- 工具确认对话框 -->
-    <el-dialog v-model="toolDialog" title="上门前工具确认" width="440px">
-      <el-form label-width="90px">
-        <el-form-item label="理发工具"><el-switch v-model="toolForm.toolsOk" /></el-form-item>
-        <el-form-item label="围布"><el-switch v-model="toolForm.capeOk" /></el-form-item>
-        <el-form-item label="消毒用品"><el-switch v-model="toolForm.disinfectantOk" /></el-form-item>
-        <el-form-item label="服务包"><el-switch v-model="toolForm.packOk" /></el-form-item>
-        <el-form-item label="遗漏说明" v-if="!(toolForm.toolsOk && toolForm.capeOk && toolForm.disinfectantOk && toolForm.packOk)">
-          <el-input v-model="toolForm.missingItems" placeholder="遗漏物品（将自动生成工具遗漏异常）" />
+    <!-- 上门前扫码核验对话框 -->
+    <el-dialog v-model="toolDialog" title="上门前扫码核验服务包" width="640px">
+      <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 12px"
+        title="先扫描服务包封签二维码；消毒超期、封签破损、毛巾围布受潮、剪刀剃刀污渍或工具遗漏时，不允许开始服务，请联系社区改约或启用备用服务包。" />
+      <el-form label-width="120px">
+        <el-form-item label="扫描/输入封签号">
+          <el-input v-model="toolForm.sealCode" placeholder="如 SEAL-LF-20260917-01" style="width: 320px">
+            <template #append><el-button @click="doScan">扫码核验</el-button></template>
+          </el-input>
         </el-form-item>
+        <div v-if="scannedKit" class="scan-box">
+          <el-descriptions :column="1" size="small" border>
+            <el-descriptions-item label="服务包">{{ scannedKit.kit.name }}</el-descriptions-item>
+            <el-descriptions-item label="消毒日期">{{ scannedKit.kit.disinfectedAt }}</el-descriptions-item>
+            <el-descriptions-item label="消毒方式">{{ DISINFECTION_METHOD_LABELS[scannedKit.kit.disinfectionMethod] || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="消毒柜编号">{{ scannedKit.kit.cabinetNo || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="责任人">{{ scannedKit.kit.responsiblePerson || '—' }}</el-descriptions-item>
+            <el-descriptions-item label="核验结论">
+              <el-tag v-if="scannedKit.checks.length" type="danger">不通过：{{ scannedKit.checks.join('；') }}</el-tag>
+              <el-tag v-else type="success">系统记录达标</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+        </div>
+        <el-divider content-position="left">逐项现场检查</el-divider>
+        <el-form-item label="封签完好"><el-switch v-model="toolForm.sealIntact" active-text="完好" inactive-text="破损" /></el-form-item>
+        <el-form-item label="消毒在有效期"><el-switch v-model="toolForm.disinfectionValid" active-text="有效" inactive-text="过期" /></el-form-item>
+        <el-form-item label="消毒方式可查"><el-switch v-model="toolForm.methodOk" /></el-form-item>
+        <el-form-item label="消毒柜编号可查"><el-switch v-model="toolForm.cabinetOk" /></el-form-item>
+        <el-form-item label="责任人可查"><el-switch v-model="toolForm.responsibleOk" /></el-form-item>
+        <el-form-item label="理发工具齐备"><el-switch v-model="toolForm.toolsOk" /></el-form-item>
+        <el-form-item label="剪刀剃刀无污渍"><el-switch v-model="toolForm.toolsClean" active-text="清洁" inactive-text="有污渍" /></el-form-item>
+        <el-form-item label="围布齐备"><el-switch v-model="toolForm.capeOk" /></el-form-item>
+        <el-form-item label="毛巾围布干燥"><el-switch v-model="toolForm.clothDry" active-text="干燥" inactive-text="受潮" /></el-form-item>
+        <el-form-item label="消毒用品齐备"><el-switch v-model="toolForm.disinfectantOk" /></el-form-item>
+        <el-form-item label="服务包齐备"><el-switch v-model="toolForm.packOk" /></el-form-item>
+        <el-form-item label="不达标说明"><el-input v-model="toolForm.missingItems" placeholder="如有遗漏/不达标请说明" /></el-form-item>
+
+        <el-divider content-position="left">感染风险（头癣/皮肤病/开放性伤口/要求一次性用品）</el-divider>
+        <el-form-item label="标记感染风险"><el-switch v-model="toolForm.infectionRisk" /></el-form-item>
+        <template v-if="toolForm.infectionRisk">
+          <el-form-item label="风险原因">
+            <el-select v-model="toolForm.infectionRiskReason" style="width: 100%">
+              <el-option label="老人有头癣" value="老人有头癣" />
+              <el-option label="老人有皮肤病" value="老人有皮肤病" />
+              <el-option label="老人有开放性伤口" value="老人有开放性伤口" />
+              <el-option label="老人明确要求使用一次性用品" value="老人明确要求使用一次性用品" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="工具单独分装"><el-switch v-model="toolForm.toolsSeparated" /></el-form-item>
+          <el-form-item label="已用一次性用品"><el-switch v-model="toolForm.disposableUsed" /></el-form-item>
+          <el-form-item label="用后处理方式">
+            <el-input v-model="toolForm.postUseHandling" type="textarea" :rows="2"
+                      placeholder="如：一次性用品按医废回收；重复工具回站含氯浸泡加强消毒并单独封装备查" />
+          </el-form-item>
+        </template>
       </el-form>
       <template #footer>
         <el-button @click="toolDialog = false">取消</el-button>
-        <el-button type="primary" @click="doConfirmTools">提交确认</el-button>
+        <el-button type="danger" plain @click="toolIssueDialog = true">核验不达标：联系社区</el-button>
+        <el-button type="primary" @click="doConfirmTools">提交核验</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 核验不达标处置：改约 / 取消 / 启用备用包 -->
+    <el-dialog v-model="toolIssueDialog" title="核验不达标处置（不记老人违约、不扣补贴）" width="460px">
+      <el-radio-group v-model="toolIssueAction" style="margin-bottom: 12px">
+        <el-radio value="reschedule">联系社区改约</el-radio>
+        <el-radio value="cancel">取消（标记理发师空跑）</el-radio>
+      </el-radio-group>
+      <el-form label-width="90px">
+        <template v-if="toolIssueAction === 'reschedule'">
+          <el-form-item label="新日期"><el-date-picker v-model="toolIssueForm.newDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item>
+          <el-form-item label="新时段">
+            <el-select v-model="toolIssueForm.newTimeSlot" style="width: 100%">
+              <el-option v-for="s in TIME_SLOTS" :key="s" :label="s" :value="s" />
+            </el-select>
+          </el-form-item>
+        </template>
+        <el-form-item label="理发师空跑"><el-switch v-model="toolIssueForm.emptyRun" /></el-form-item>
+        <el-form-item label="原因"><el-input v-model="toolIssueForm.reason" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="toolIssueDialog = false">返回</el-button>
+        <el-button type="primary" @click="doToolIssue">确认</el-button>
       </template>
     </el-dialog>
 
@@ -223,6 +380,39 @@
       <template #footer>
         <el-button @click="rateDialog = false">取消</el-button>
         <el-button type="primary" @click="doRate">提交评价</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 感染反馈对话框 -->
+    <el-dialog v-model="infectionDialog" title="反馈皮肤瘙痒/红疹/感染" width="460px">
+      <el-alert type="error" :closable="false" show-icon style="margin-bottom: 12px"
+        title="提交后社区将按理发师、服务包、工具编号和同日服务记录反查，通知同工具服务老人的家属和志愿者并建议就医。" />
+      <el-input v-model="infectionText" type="textarea" :rows="4"
+                placeholder="请描述症状（瘙痒/红疹/感染）、出现时间、是否已就医" />
+      <template #footer>
+        <el-button @click="infectionDialog = false">取消</el-button>
+        <el-button type="danger" @click="doReportInfection">提交反馈并发起追溯</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 空跑补偿认定 -->
+    <el-dialog v-model="compDialog" title="理发师空跑补偿认定" width="460px">
+      <el-form label-width="110px">
+        <el-form-item label="认定结果">
+          <el-radio-group v-model="compForm.result">
+            <el-radio value="COMMUNITY_APPROVED">社区规则公益资金补偿</el-radio>
+            <el-radio value="BARBER_BORNE">工具遗漏/消毒失责，理发师承担</el-radio>
+            <el-radio value="WAIVED">无需补偿</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="补偿金额" v-if="compForm.result === 'COMMUNITY_APPROVED'">
+          <el-input-number v-model="compForm.amount" :min="0" :max="100" /> 元
+        </el-form-item>
+        <el-form-item label="说明"><el-input v-model="compForm.note" type="textarea" :rows="2" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="compDialog = false">取消</el-button>
+        <el-button type="primary" @click="doAdjudicate">确认认定</el-button>
       </template>
     </el-dialog>
 
@@ -280,7 +470,9 @@ import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   orderDetail, confirmTools, checkIn, startService, completeOrder, cancelOrder,
-  rescheduleOrder, rateOrder, confirmPayment, reportException, listOrderExceptions
+  rescheduleOrder, rateOrder, confirmPayment, reportException, listOrderExceptions,
+  scanSeal, activateSpareKit, rescheduleToolIssue, cancelToolIssue, adjudicateCompensation,
+  createInfectionCase
 } from '../api'
 import { useUserStore } from '../store/user'
 import PhotoUpload from '../components/PhotoUpload.vue'
@@ -289,7 +481,8 @@ import {
   ORDER_STATUS_LABELS, ORDER_STATUS_TYPES, ORDER_TYPE_LABELS, RISK_LABELS, RISK_TYPES,
   PAYMENT_LABELS, PAYMENT_TYPES, EXCEPTION_TYPE_LABELS, EXCEPTION_STATUS_LABELS,
   EXCEPTION_STATUS_TYPES, SUBSIDY_STATUS_LABELS, SUBSIDY_STATUS_TYPES,
-  FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS, ROLE_LABELS, EVENT_TYPE_LABELS, TIME_SLOTS
+  FOLLOWUP_TYPE_LABELS, FOLLOWUP_STATUS_LABELS, ROLE_LABELS, EVENT_TYPE_LABELS, TIME_SLOTS,
+  DISINFECTION_METHOD_LABELS, COMPENSATION_STATUS_LABELS, COMPENSATION_STATUS_TYPES
 } from '../utils/labels'
 
 const route = useRoute()
@@ -302,20 +495,33 @@ const exceptions = ref([])
 const activePanels = ref(['tool', 'visit', 'record'])
 
 const toolDialog = ref(false)
+const toolIssueDialog = ref(false)
+const toolIssueAction = ref('reschedule')
+const scannedKit = ref(null)
 const checkInDialog = ref(false)
 const completeDialog = ref(false)
 const rateDialog = ref(false)
 const exceptionDialog = ref(false)
+const infectionDialog = ref(false)
+const compDialog = ref(false)
 const rescheduleDialog = ref(false)
 const cancelDialog = ref(false)
 const cancelReason = ref('')
+const infectionText = ref('')
 
-const toolForm = reactive({ toolsOk: true, capeOk: true, disinfectantOk: true, packOk: true, missingItems: '' })
+const toolForm = reactive({
+  sealCode: '', sealIntact: true, disinfectionValid: true, methodOk: true, cabinetOk: true, responsibleOk: true,
+  toolsOk: true, toolsClean: true, capeOk: true, clothDry: true, disinfectantOk: true, packOk: true,
+  missingItems: '', infectionRisk: false, infectionRiskReason: '老人有皮肤病',
+  toolsSeparated: false, postUseHandling: '', disposableUsed: false
+})
+const toolIssueForm = reactive({ newDate: '', newTimeSlot: '09:00-11:00', reason: '', emptyRun: true })
 const checkInForm = reactive({ entrySafe: true, elderState: '', mentalState: '良好', familyAuthorized: false, photos: [], notes: '' })
 const completeForm = reactive({ photos: [], paymentNote: '' })
 const rateForm = reactive({ rating: 5, comment: '' })
 const exceptionForm = reactive({ type: 'ELDER_UNWELL', description: '' })
 const rescheduleForm = reactive({ newDate: '', newTimeSlot: '09:00-11:00', reason: '' })
+const compForm = reactive({ result: 'COMMUNITY_APPROVED', amount: 20, note: '' })
 
 const order = computed(() => detail.value.order)
 const isFinished = computed(() => ['COMPLETED', 'CANCELLED'].includes(order.value?.status))
@@ -326,7 +532,7 @@ const isVolunteerOfOrder = computed(() =>
 const staffLike = computed(() => ['ADMIN', 'STAFF'].includes(store.role))
 
 const canConfirmTools = computed(() =>
-  (isBarberOfOrder.value || staffLike.value) && order.value?.status === 'ASSIGNED')
+  (isBarberOfOrder.value || staffLike.value) && ['ASSIGNED', 'TOOL_CONFIRMED'].includes(order.value?.status))
 const canCheckIn = computed(() =>
   (isVolunteerOfOrder.value || staffLike.value) && order.value?.volunteerId
   && ['ASSIGNED', 'TOOL_CONFIRMED'].includes(order.value?.status))
@@ -337,11 +543,9 @@ const canComplete = computed(() =>
   (isBarberOfOrder.value || staffLike.value) && order.value?.status === 'IN_SERVICE')
 const canRate = computed(() =>
   ['FAMILY', 'STAFF', 'ADMIN'].includes(store.role) && order.value?.status === 'COMPLETED' && !order.value?.satisfactionRating)
-const canConfirmPay = computed(() =>
-  ['BARBER', 'STAFF', 'ADMIN', 'FINANCE'].includes(store.role)
-  && order.value?.status === 'COMPLETED'
-  && ['UNPAID', 'DISPUTED'].includes(order.value?.paymentStatus)
-  && Number(order.value?.selfPayAmount) > 0)
+const canReportInfection = computed(() => order.value?.status !== 'CANCELLED')
+const canAdjudicate = computed(() =>
+  staffLike.value || store.role === 'FINANCE')
 
 const tagType = (ok) => (ok ? 'success' : 'danger')
 
@@ -350,20 +554,71 @@ const load = async () => {
   try {
     detail.value = await orderDetail(id)
     exceptions.value = await listOrderExceptions(id)
+    if (detail.value.toolConfirmation?.sealCode) {
+      toolForm.sealCode = detail.value.toolConfirmation.sealCode
+    }
   } finally {
     loading.value = false
   }
 }
 
-const doConfirmTools = async () => {
-  await confirmTools(id, toolForm)
-  const allOk = toolForm.toolsOk && toolForm.capeOk && toolForm.disinfectantOk && toolForm.packOk
-  if (!allOk) {
-    await reportException({ orderId: Number(id), type: 'TOOL_MISSING', description: `工具遗漏：${toolForm.missingItems || '未说明'}` })
-    ElMessage.warning('已记录工具遗漏异常，请补齐后上门服务')
-  } else {
-    ElMessage.success('工具确认完成')
+const openToolDialog = () => {
+  scannedKit.value = null
+  toolDialog.value = true
+}
+
+const doScan = async () => {
+  if (!toolForm.sealCode) {
+    ElMessage.warning('请输入或扫描封签编号')
+    return
   }
+  try {
+    scannedKit.value = await scanSeal(order.value.barberId, toolForm.sealCode)
+    const k = scannedKit.value
+    toolForm.sealIntact = k.kit.sealStatus === 'INTACT'
+    toolForm.disinfectionValid = k.effectiveStatus === 'DISINFECTED'
+    toolForm.methodOk = !!k.kit.disinfectionMethod
+    toolForm.cabinetOk = !!k.kit.cabinetNo
+    toolForm.responsibleOk = !!k.kit.responsiblePerson
+    ElMessage.success(k.checks.length ? '系统记录存在不达标项' : '扫码核验：系统记录达标')
+  } catch (e) {
+    scannedKit.value = null
+    // request 拦截器已提示
+  }
+}
+
+const doConfirmTools = async () => {
+  try {
+    await confirmTools(id, { ...toolForm })
+    ElMessage.success('扫码核验通过，可上门服务')
+    toolDialog.value = false
+    load()
+  } catch (e) {
+    // 核验未通过：后端返回拦截原因，保留对话框引导改约/备用包
+    load()
+  }
+}
+
+const doActivateSpare = async (kitId) => {
+  await ElMessageBox.confirm('确认启用该备用服务包？使用后须补录消毒，未补录前该备用包不得再次使用。', '启用备用包', { type: 'warning' })
+  await activateSpareKit(id, { spareKitId: kitId })
+  ElMessage.success('已启用备用服务包')
+  load()
+}
+
+const doToolIssue = async () => {
+  if (toolIssueAction.value === 'reschedule') {
+    if (!toolIssueForm.newDate) {
+      ElMessage.warning('请选择改约日期')
+      return
+    }
+    await rescheduleToolIssue(id, { ...toolIssueForm })
+    ElMessage.success('已联系社区改约（不记老人违约、不扣补贴）')
+  } else {
+    await cancelToolIssue(id, { reason: toolIssueForm.reason || '工具核验不达标', emptyRun: toolIssueForm.emptyRun })
+    ElMessage.success('已因工具问题取消，理发师空跑待社区认定补偿')
+  }
+  toolIssueDialog.value = false
   toolDialog.value = false
   load()
 }
@@ -405,6 +660,25 @@ const doReportException = async () => {
   await reportException({ orderId: Number(id), ...exceptionForm })
   ElMessage.success('异常已上报，社区与相关方已收到通知')
   exceptionDialog.value = false
+  load()
+}
+
+const doReportInfection = async () => {
+  if (!infectionText.value) {
+    ElMessage.warning('请描述症状')
+    return
+  }
+  await createInfectionCase({ orderId: Number(id), symptom: '皮肤瘙痒/红疹/感染反馈', description: infectionText.value })
+  ElMessage.success('已发起交叉感染追溯，社区将反查同工具服务老人并通知家属/志愿者')
+  infectionDialog.value = false
+  infectionText.value = ''
+  load()
+}
+
+const doAdjudicate = async () => {
+  await adjudicateCompensation(id, { ...compForm })
+  ElMessage.success('补偿认定完成')
+  compDialog.value = false
   load()
 }
 
@@ -468,5 +742,12 @@ onMounted(load)
 .muted {
   color: #909399;
   font-size: 12px;
+}
+.scan-box {
+  margin-bottom: 12px;
+}
+.spare-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed #ebeef5;
 }
 </style>

@@ -40,8 +40,12 @@ public class DataInitializer implements CommandLineRunner {
     private final ExceptionRecordRepository exceptionRepository;
     private final FollowUpRepository followUpRepository;
     private final CommunityEventRepository event2Repository;
+    private final DisinfectionRecordRepository disinfectionRecordRepository;
+    private final InfectionCaseRepository infectionCaseRepository;
+    private final InfectionContactRepository infectionContactRepository;
     private final PasswordEncoder passwordEncoder;
     private final CareTaskService careTaskService;
+    private final com.community.haircut.service.InfectionTraceService infectionTraceService;
 
     public DataInitializer(UserRepository userRepository, BarberProfileRepository barberProfileRepository,
                            VolunteerProfileRepository volunteerProfileRepository, ToolKitRepository toolKitRepository,
@@ -51,7 +55,11 @@ public class DataInitializer implements CommandLineRunner {
                            VisitRecordRepository visitRecordRepository, ServiceRecordRepository serviceRecordRepository,
                            SubsidyRecordRepository subsidyRepository, ExceptionRecordRepository exceptionRepository,
                            FollowUpRepository followUpRepository, CommunityEventRepository event2Repository,
-                           PasswordEncoder passwordEncoder, CareTaskService careTaskService) {
+                           DisinfectionRecordRepository disinfectionRecordRepository,
+                           InfectionCaseRepository infectionCaseRepository,
+                           InfectionContactRepository infectionContactRepository,
+                           PasswordEncoder passwordEncoder, CareTaskService careTaskService,
+                           com.community.haircut.service.InfectionTraceService infectionTraceService) {
         this.userRepository = userRepository;
         this.barberProfileRepository = barberProfileRepository;
         this.volunteerProfileRepository = volunteerProfileRepository;
@@ -67,8 +75,12 @@ public class DataInitializer implements CommandLineRunner {
         this.exceptionRepository = exceptionRepository;
         this.followUpRepository = followUpRepository;
         this.event2Repository = event2Repository;
+        this.disinfectionRecordRepository = disinfectionRecordRepository;
+        this.infectionCaseRepository = infectionCaseRepository;
+        this.infectionContactRepository = infectionContactRepository;
         this.passwordEncoder = passwordEncoder;
         this.careTaskService = careTaskService;
+        this.infectionTraceService = infectionTraceService;
     }
 
     @Override
@@ -90,6 +102,8 @@ public class DataInitializer implements CommandLineRunner {
         User finance = user("finance", "finance123", "钱财务", Role.FINANCE, "13800000008");
         User grid = user("grid", "grid123", "周网格", Role.GRID, "13800000009");
         User family = user("family", "family123", "张家属", Role.FAMILY, "13800000010");
+        // 郑永康家属（用于交叉感染追溯时通知同工具服务老人家属）
+        User family2 = user("family2", "family123", "郑家属", Role.FAMILY, "13800000011");
 
         // ---------- 理发师档案与工具包 ----------
         barberProfile(barber1, "男士短发,女士短发,剃头", "1栋,2栋,3栋", 96, 5, 0, 0, 0);
@@ -98,12 +112,52 @@ public class DataInitializer implements CommandLineRunner {
         volunteerProfile(volunteer1, 6);
         volunteerProfile(volunteer2, 4);
 
-        toolKit(barber1, "标准理发工具包A", "剪刀,推子,梳子,围布,消毒喷雾,服务包",
-                DisinfectionStatus.DISINFECTED, LocalDateTime.now().minusHours(2));
-        toolKit(barber2, "标准理发工具包B", "剪刀,推子,梳子,围布,消毒喷雾,服务包",
-                DisinfectionStatus.DISINFECTED, LocalDateTime.now().minusHours(20));
-        toolKit(barber3, "标准理发工具包C", "剪刀,推子,梳子,围布",
-                DisinfectionStatus.PENDING, LocalDateTime.now().minusDays(4));
+        // barber3 历史交叉感染责任：暂停上门资格、派单权重下调，待消毒培训+工具复检后恢复
+        BarberProfile bp3 = barberProfileRepository.findByUserId(barber3.getId()).orElseThrow();
+        bp3.setSuspended(true);
+        bp3.setSuspendReason("历史追溯单确认消毒责任，暂停上门，待消毒培训与工具复检");
+        bp3.setSuspendedAt(LocalDateTime.now().minusDays(6));
+        bp3.setInfectionCount(1);
+        bp3.setDispatchWeight(70);
+        bp3.setDisinfectionTrained(false);
+        bp3.setToolRechecked(false);
+        barberProfileRepository.save(bp3);
+
+        // 主工具包：封签编号、消毒日期/方式、消毒柜编号、责任人均可扫码核验
+        ToolKit kitA = kit(barber1, KitType.MAIN, "标准理发工具包A",
+                "剪刀A-01,推子A-02,梳子,围布,毛巾,消毒喷雾,一次性围布",
+                "SEAL-LF-20260917-01", SealStatus.INTACT, DisinfectionStatus.DISINFECTED,
+                LocalDateTime.now().minusHours(2), DisinfectionMethod.UV, "XDG-01", "李理发", 48, null);
+        ToolKit kitB = kit(barber2, KitType.MAIN, "标准理发工具包B",
+                "剪刀B-01,推子B-02,梳子,围布,毛巾,消毒喷雾,一次性围布",
+                "SEAL-ZF-20260916-01", SealStatus.INTACT, DisinfectionStatus.DISINFECTED,
+                LocalDateTime.now().minusHours(20), DisinfectionMethod.UV, "XDG-02", "赵理发", 48, null);
+        kit(barber3, KitType.MAIN, "标准理发工具包C",
+                "剪刀C-01,推子C-02,梳子,围布",
+                null, SealStatus.BROKEN, DisinfectionStatus.PENDING,
+                LocalDateTime.now().minusDays(4), null, null, null, 48, null);
+
+        // 上门备用服务包：一包完好可用；一包封签破损（演示核验不通过）；一包已使用待补录消毒（演示补录前锁定）
+        kit(barber1, KitType.SPARE, "上门备用服务包-完好",
+                "备用剪刀,备用推子,一次性围布,一次性毛巾,消毒湿巾",
+                "SEAL-LF-SPARE-01", SealStatus.INTACT, DisinfectionStatus.DISINFECTED,
+                LocalDateTime.now().minusHours(6), DisinfectionMethod.HIGH_TEMP, "XDG-01", "社区消毒站-王社区", 48, null);
+        kit(barber1, KitType.SPARE, "上门备用服务包-封签破损",
+                "备用剪刀,备用推子,一次性围布",
+                "SEAL-LF-SPARE-02", SealStatus.BROKEN, DisinfectionStatus.DISINFECTED,
+                LocalDateTime.now().minusHours(30), DisinfectionMethod.UV, "XDG-01", "李理发", 48, null);
+        ToolKit spareBlocked = kit(barber1, KitType.SPARE, "上门备用服务包-待补录消毒",
+                "备用剪刀,一次性围布,一次性毛巾",
+                "SEAL-LF-SPARE-03", SealStatus.INTACT, DisinfectionStatus.DISINFECTED,
+                LocalDateTime.now().minusDays(2), DisinfectionMethod.CHLORINE, "XDG-01", "社区消毒站-王社区", 48, null);
+
+        // 消毒记录（主包 + 待补录备用包各一条历史记录）
+        disinfectionRecord(kitA, LocalDateTime.now().minusHours(2), DisinfectionMethod.UV, "XDG-01", "李理发",
+                "SEAL-LF-20260917-01", false, null);
+        disinfectionRecord(kitB, LocalDateTime.now().minusHours(20), DisinfectionMethod.UV, "XDG-02", "赵理发",
+                "SEAL-ZF-20260916-01", false, null);
+        disinfectionRecord(spareBlocked, LocalDateTime.now().minusDays(2), DisinfectionMethod.CHLORINE, "XDG-01",
+                "社区消毒站-王社区", "SEAL-LF-SPARE-03", false, null);
 
         // ---------- 排班：今天起 14 天 ----------
         LocalDate today = LocalDate.now();
@@ -140,7 +194,7 @@ public class DataInitializer implements CommandLineRunner {
                 SubsidyType.NONE, "吴儿子", "13900000006", null, false, 30);
         Elder e8 = elder("郑永康", "男", today.minusYears(79).minusMonths(4), "4栋", "2单元", "202", 900, false,
                 "慢性支气管炎", RiskLevel.MID, "自如", false, "平头", "上午",
-                SubsidyType.PARTIAL, "郑女儿", "13900000007", null, false, 30);
+                SubsidyType.PARTIAL, "郑女儿", "13900000007", family2.getId(), false, 30);
         Elder e9 = elder("钱淑华", "女", today.minusYears(83).minusMonths(6), "5栋", "1单元", "501", 1200, false,
                 "皮肤敏感、高血压", RiskLevel.HIGH, "拄拐", true, "短发，动作轻", "上午",
                 SubsidyType.FULL, "钱儿子", "13900000008", null, false, 30);
@@ -181,12 +235,14 @@ public class DataInitializer implements CommandLineRunner {
         seedException(o4, ExceptionType.SKIN_CUT, staff, "理发过程中老人耳后轻微划伤，已现场消毒处理",
                 "已送医检查无大碍，理发师加强培训并扣除信用分", true);
         seedFollowUp(e9, o4, FollowUpType.EXCEPTION, "皮肤划伤异常回访：确认伤口愈合情况与老人情绪");
-        // 已完成：李秀兰（独居，服务回访待办）
+        // 已完成：李秀兰（独居，服务回访待办；感染风险服务：老人皮肤红疹，使用一次性用品，工具单独分装）
         ServiceOrder o5 = seedOrder("HF" + today.minusDays(2).format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-001",
                 e3, barber1, volunteer1, OrderType.NORMAL, today.minusDays(2), "09:00-11:00",
                 bd(30), bd(30), bd(0), PaymentStatus.WAIVED, 5, "非常感谢");
-        completeSeed(o5, barber1, volunteer1, true);
+        completeSeed(o5, barber1, volunteer1, true, true,
+                "老人颈部有皮疹/皮肤病，明确要求使用一次性用品", "一次性用品用后按医废单独回收，重复使用工具回站含氯浸泡加强消毒并单独封装备查");
         seedFollowUp(e3, o5, FollowUpType.SERVICE, "独居老人服务后回访：确认进门安全、老人精神状态与后续关怀需求");
+        seedFollowUp(e3, o5, FollowUpType.EXCEPTION, "感染风险服务回访（老人颈部有皮疹/皮肤病，明确要求使用一次性用品）：确认皮肤状况无瘙痒/红疹，工具已按一次性用品用后按医废单独回收，重复使用工具回站含氯浸泡加强消毒并单独封装备查处理");
         // 75 天前完成：冯长顺（触发长期未预约关怀）
         ServiceOrder o6 = seedOrder("HF" + today.minusDays(75).format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-001",
                 e10, barber1, null, OrderType.NORMAL, today.minusDays(75), "14:00-16:00",
@@ -195,6 +251,45 @@ public class DataInitializer implements CommandLineRunner {
         // 连续取消：吴彩霞（触发连续取消关怀）
         seedCancelled(e7, barber2, today.minusDays(3), "老人临时去医院复查");
         seedCancelled(e7, barber2, today.minusDays(1), "家属要求改期");
+
+        // 同日同工具第二单：钱淑华(o4,09:00) 与 郑永康 同日均由赵理发使用工具包B，供交叉感染反查命中
+        ServiceOrder o7 = seedOrder("HF" + today.minusDays(3).format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-002",
+                e8, barber2, volunteer2, OrderType.NORMAL, today.minusDays(3), "14:00-16:00",
+                bd(30), bd(20), bd(10), PaymentStatus.PAID, 4, null);
+        completeSeed(o7, barber2, volunteer2, true);
+
+        // 今日已完成单：周福生（独居）使用备用服务包，备用包待补录消毒（未补录前不可再派单）
+        ServiceOrder o9 = seedOrder("HF" + today.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-010",
+                e6, barber1, volunteer1, OrderType.NORMAL, today, "08:00-10:00",
+                bd(30), bd(30), bd(0), PaymentStatus.WAIVED, 5, null);
+        completeSeed(o9, barber1, volunteer1, true);
+        o9.setSpareUsed(true);
+        o9.setUsedKitId(spareBlocked.getId());
+        o9.setUsedKitName(spareBlocked.getName());
+        orderRepository.save(o9);
+        spareBlocked.setLastUsedOrderId(o9.getId());
+        spareBlocked.setLastUsedAt(today.atTime(10, 0));
+        toolKitRepository.save(spareBlocked);
+        seedEvent(o9, "TOOL_CONFIRM", barber1, "启用上门备用服务包「上门备用服务包-待补录消毒」；使用后须补录消毒，未补录前该备用包不得再次使用");
+
+        // 工具问题取消：赵德柱今日单因主包消毒过期/封签破损取消，不算老人违约；理发师空跑补偿待社区认定
+        ServiceOrder o8 = seedOrder("HF" + today.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-011",
+                e4, barber1, null, OrderType.NORMAL, today, "14:00-16:00",
+                bd(30), bd(20), bd(10), PaymentStatus.UNPAID, null, null);
+        o8.setStatus(OrderStatus.CANCELLED);
+        o8.setCancelSource("TOOL_ISSUE");
+        o8.setCancelReason("工具问题取消：上门扫码发现消毒超过有效期且封签破损，联系社区改约");
+        o8.setEmptyRun(true);
+        o8.setCompensationStatus(com.community.haircut.enums.CompensationStatus.PENDING);
+        orderRepository.save(o8);
+        seedEvent(o8, "TOOL_CONFIRM", barber1, "上门前扫码核验未通过，不允许开始服务：消毒超过有效期；服务包封签破损。请联系社区改约或启用备用服务包");
+        seedEvent(o8, "CANCEL", staff, "因工具问题取消（不记老人违约、不扣补贴）：消毒过期/封签破损；理发师已空跑，待社区按规则认定补偿");
+
+        // 交叉感染追溯：家属反馈钱淑华耳周红疹瘙痒 → 按理发师/服务包/工具编号/同日服务反查，命中郑永康(o7)
+        infectionTraceService.createCase(o4.getId(), "皮肤瘙痒/红疹/感染反馈：耳周红疹、瘙痒",
+                "家属电话反馈老人服务后耳周出现红疹并伴瘙痒，怀疑工具消毒不达标，要求社区排查并通知同日理发老人",
+                new OrderService.LoginUserInfo(staff.getId(), staff.getRealName(), Role.STAFF));
+
         // 今天待上门：张桂英（供理发师/志愿者演示流程）
         ServiceOrder todayOrder = seedOrder("HF" + today.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-001",
                 e1, barber1, volunteer1, OrderType.NORMAL, today, "09:00-11:00",
@@ -254,14 +349,46 @@ public class DataInitializer implements CommandLineRunner {
         volunteerProfileRepository.save(p);
     }
 
-    private void toolKit(User barber, String name, String items, DisinfectionStatus status, LocalDateTime disinfectedAt) {
+    private ToolKit kit(User barber, KitType kitType, String name, String items, String sealCode,
+                        SealStatus sealStatus, DisinfectionStatus status, LocalDateTime disinfectedAt,
+                        DisinfectionMethod method, String cabinetNo, String responsible, Integer validHours,
+                        Long lastUsedOrderId) {
         ToolKit kit = new ToolKit();
         kit.setBarberId(barber.getId());
+        kit.setKitType(kitType);
         kit.setName(name);
         kit.setItems(items);
+        kit.setSealCode(sealCode);
+        kit.setSealStatus(sealStatus);
         kit.setStatus(status);
         kit.setDisinfectedAt(disinfectedAt);
-        toolKitRepository.save(kit);
+        kit.setDisinfectionMethod(method);
+        kit.setCabinetNo(cabinetNo);
+        kit.setResponsiblePerson(responsible);
+        kit.setValidHours(validHours == null ? 48 : validHours);
+        kit.setLastUsedOrderId(lastUsedOrderId);
+        if (lastUsedOrderId != null) {
+            kit.setLastUsedAt(LocalDateTime.now().minusHours(3));
+        }
+        return toolKitRepository.save(kit);
+    }
+
+    private void disinfectionRecord(ToolKit kit, LocalDateTime at, DisinfectionMethod method, String cabinetNo,
+                                    String responsible, String sealCode, boolean supplementary, Long orderId) {
+        DisinfectionRecord r = new DisinfectionRecord();
+        r.setKitId(kit.getId());
+        r.setBarberId(kit.getBarberId());
+        r.setDisinfectedAt(at);
+        r.setMethod(method);
+        r.setCabinetNo(cabinetNo);
+        r.setResponsiblePerson(responsible);
+        r.setSealCode(sealCode);
+        r.setValidHours(kit.getValidHours());
+        r.setSupplementary(supplementary);
+        r.setOrderId(orderId);
+        r.setOperatorName(responsible);
+        r.setCreatedAt(at);
+        disinfectionRecordRepository.save(r);
     }
 
     private void schedule(User barber, LocalDate date, String start, String end, int maxOrders) {
@@ -342,16 +469,50 @@ public class DataInitializer implements CommandLineRunner {
 
     /** 把种子单推进到已完成，并补齐工具确认/陪同/服务档案/补贴记录 */
     private void completeSeed(ServiceOrder order, User barber, User volunteer, boolean withSubsidy) {
+        completeSeed(order, barber, volunteer, withSubsidy, false, null, null);
+    }
+
+    /** 把种子单推进到已完成；infectionRisk=true 时模拟感染风险服务（单独分装+用后处理） */
+    private void completeSeed(ServiceOrder order, User barber, User volunteer, boolean withSubsidy,
+                              boolean infectionRisk, String riskReason, String postHandling) {
         LocalDate date = order.getScheduledDate();
+        ToolKit kit = toolKitRepository.findFirstByBarberIdAndKitType(barber.getId(), KitType.MAIN).orElse(null);
         ToolConfirmation tc = new ToolConfirmation();
         tc.setOrderId(order.getId());
         tc.setBarberId(barber.getId());
+        tc.setKitId(kit == null ? null : kit.getId());
+        tc.setSealCode(kit == null ? null : kit.getSealCode());
+        tc.setSealIntact(true);
+        tc.setDisinfectionValid(true);
+        tc.setMethodOk(true);
+        tc.setCabinetOk(true);
+        tc.setResponsibleOk(true);
         tc.setToolsOk(true);
+        tc.setToolsClean(true);
         tc.setCapeOk(true);
+        tc.setClothDry(true);
         tc.setDisinfectantOk(true);
         tc.setPackOk(true);
+        tc.setInfectionRisk(infectionRisk);
+        tc.setInfectionRiskReason(riskReason);
+        tc.setToolsSeparated(infectionRisk);
+        tc.setPostUseHandling(postHandling);
+        tc.setDisposableUsed(false);
         tc.setConfirmedAt(date.atTime(8, 30));
         toolConfirmationRepository.save(tc);
+
+        // 锁定实际使用包/工具编号快照（交叉感染反查依据）
+        if (kit != null) {
+            order.setUsedKitId(kit.getId());
+            order.setUsedKitName(kit.getName());
+            order.setUsedToolItems(kit.getItems());
+            order.setUsedKitDisinfectedAt(kit.getDisinfectedAt());
+            order.setUsedKitCompliant(true);
+        }
+        order.setInfectionRisk(infectionRisk);
+        order.setInfectionRiskReason(riskReason);
+        order.setPostUseHandling(postHandling);
+        orderRepository.save(order);
 
         if (volunteer != null) {
             VisitRecord vr = new VisitRecord();
